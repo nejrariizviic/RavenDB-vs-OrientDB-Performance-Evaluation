@@ -12,9 +12,11 @@ const orientDbService = require("./orientdb.service");
  *   RavenDB kolekcija "Movies"  -> { movieId, title, genres }
  *                                  dokument ID po konvenciji: "movies/{movieId}"
  *   RavenDB kolekcija "Ratings" -> { movieId, userId, rating, timestamp }
+ *   RavenDB kolekcija "Users"   -> { userId }
  *
  *   OrientDB klasa "Movie"  -> { movieId, title, genres }
  *   OrientDB klasa "Rating" -> { movieId, userId, rating, timestamp }
+ *   OrientDB klasa "User"   -> { userId }
  *
  * Ako je u tvom modelu ID RavenDB dokumenta drugačiji (npr. auto-generisan
  * "movies/1-A"), ravenGetMovieById treba zamijeniti sa upitom po polju
@@ -110,6 +112,111 @@ async function ravenGetTopRatedMovies(limit = 10, minRatings = 50) {
 }
 
 // ==========================================
+// JEDNOSTAVAN POST UPIT - dodaj novi film
+// ==========================================
+
+/**
+ * Dodaje novi film u Movies kolekciju - direktan insert dokumenta po ključu
+ * "movies/{movieId}" (ista konvencija ID-ja kao i kod ravenGetMovieById).
+ *
+ * Prije upisa provjerava da film sa istim movieId već ne postoji, kako bi se
+ * spriječili duplikati (ažuriranje postojećeg filma je posebna PUT/PATCH
+ * operacija, ne radi se ovdje).
+ * Povratna vrijednost je status-objekat:
+ *   - { status: "duplicate" }               -> film sa tim movieId već postoji
+ *   - { status: "created", data: {...} }    -> uspješno upisano
+ *
+ * @param {{movieId:number, title:string, genres:*}} movie
+ * @returns {Promise<{status:string, data?:object}>}
+ */
+async function ravenAddMovie(movie) {
+  const { movieId, title, genres } = movie;
+  const session = ravenDbService.openSession();
+  try {
+    const existingMovie = await session.load(`movies/${movieId}`);
+    if (existingMovie) {
+      return { status: "duplicate" };
+    }
+
+    const doc = { movieId: Number(movieId), title, genres };
+    await session.store(doc, `movies/${movieId}`);
+    // Bitno: običan JS objekat (bez klase) RavenDB automatski NE svrstava
+    // u kolekciju "Movies" - bez ove linije dokument bi bio vidljiv samo
+    // preko load-a po ID-u, ali ne i preko "from Movies" upita u Studio-u.
+    session.advanced.getMetadataFor(doc)["@collection"] = "Movies";
+    await session.saveChanges();
+    return { status: "created", data: doc };
+  } finally {
+    session.dispose();
+  }
+}
+
+// ==========================================
+// SLOŽEN POST UPIT - dodaj ocjenu SAMO ako korisnik i film već postoje
+// ==========================================
+
+/**
+ * Dodaje novu ocjenu (Rating) u Ratings kolekciju, ali samo ukoliko SVI
+ * preduslovi budu ispunjeni:
+ *   1) film sa datim movieId već postoji u Movies kolekciji
+ *   2) korisnik sa datim userId već postoji u Users kolekciji
+ *   3) korisnik još UVIJEK NIJE ocijenio taj film (par userId+movieId
+ *      mora biti jedinstven - sprječava duplikate)
+ *
+ * Svi uslovi se provjeravaju u ISTOJ sesiji prije upisa (composite provjera).
+ * Povratna vrijednost je status-objekat kako bi kontroler mogao razlikovati
+ * "ne postoji" (404) od "već postoji ocjena" (409):
+ *   - { status: "not_found" }              -> film ili korisnik ne postoje
+ *   - { status: "duplicate" }               -> ocjena za taj par već postoji
+ *   - { status: "created", data: {...} }    -> uspješno upisano
+ *
+ * @param {{userId:number, movieId:number, rating:number}} data
+ * @returns {Promise<{status:string, data?:object}>}
+ */
+async function ravenAddRating(data) {
+  const userId = Number(data.userId);
+  const movieId = Number(data.movieId);
+  const rating = Number(data.rating);
+
+  const session = ravenDbService.openSession();
+  try {
+    const movie = await session.load(`movies/${movieId}`);
+    if (!movie) {
+      return { status: "not_found" };
+    }
+
+    const existingUser = await session
+      .query({ collection: "Users" })
+      .whereEquals("userId", userId)
+      .first();
+    if (!existingUser) {
+      return { status: "not_found" };
+    }
+
+    const existingRating = await session
+      .query({ collection: "Ratings" })
+      .whereEquals("movieId", movieId)
+      .whereEquals("userId", userId)
+      .first();
+    if (existingRating) {
+      return { status: "duplicate" };
+    }
+
+    // Unix timestamp (sekunde) - ista konvencija kao originalni MovieLens
+    // ratings.csv, umjesto ISO stringa (OrientDB Rating.timestamp je LONG).
+    const doc = { userId, movieId, rating, timestamp: Math.floor(Date.now() / 1000) };
+    await session.store(doc, "Ratings/");
+    // Isti razlog kao kod ravenAddMovie - bez ovoga dokument ne bi bio
+    // vidljiv preko "from Ratings" upita u Studio-u.
+    session.advanced.getMetadataFor(doc)["@collection"] = "Ratings";
+    await session.saveChanges();
+    return { status: "created", data: doc };
+  } finally {
+    session.dispose();
+  }
+}
+
+// ==========================================
 // ORIENTDB
 // ==========================================
 
@@ -198,13 +305,131 @@ async function orientGetTopRatedMovies(limit = 10, minRatings = 50) {
   }
 }
 
+// ==========================================
+// JEDNOSTAVAN POST UPIT - dodaj novi film
+// ==========================================
+
+/**
+ * Dodaje novi film u Movie klasu - direktan INSERT.
+ *
+ * Prije upisa provjerava da film sa istim movieId već ne postoji, kako bi se
+ * spriječili duplikati (ažuriranje postojećeg filma je posebna PUT/PATCH
+ * operacija, ne radi se ovdje).
+ * Povratna vrijednost je status-objekat:
+ *   - { status: "duplicate" }               -> film sa tim movieId već postoji
+ *   - { status: "created", data: {...} }    -> uspješno upisano
+ *
+ * @param {{movieId:number, title:string, genres:*}} movie
+ * @returns {Promise<{status:string, data?:object}>}
+ */
+async function orientAddMovie(movie) {
+  const { movieId, title, genres } = movie;
+  const session = await orientDbService.getOrientSession();
+  try {
+    const existingMovie = await session
+      .query("SELECT FROM Movie WHERE movieId = :movieId LIMIT 1", {
+        params: { movieId: Number(movieId) },
+      })
+      .all();
+    if (existingMovie.length) {
+      return { status: "duplicate" };
+    }
+
+    const result = await session
+      .command(
+        "INSERT INTO Movie SET movieId = :movieId, title = :title, genres = :genres",
+        { params: { movieId: Number(movieId), title, genres } }
+      )
+      .all();
+
+    return { status: "created", data: result[0] || { movieId: Number(movieId), title, genres } };
+  } finally {
+    await session.close().catch(() => {});
+  }
+}
+
+// ==========================================
+// SLOŽEN POST UPIT - dodaj ocjenu SAMO ako korisnik i film već postoje
+// ==========================================
+
+/**
+ * Dodaje novu ocjenu (Rating) u Rating klasu, ali samo ukoliko SVI
+ * preduslovi budu ispunjeni:
+ *   1) film sa datim movieId već postoji u Movie klasi
+ *   2) korisnik sa datim userId već postoji u User klasi
+ *   3) korisnik još UVIJEK NIJE ocijenio taj film (par userId+movieId
+ *      mora biti jedinstven - sprječava duplikate)
+ *
+ * Povratna vrijednost je status-objekat kako bi kontroler mogao razlikovati
+ * "ne postoji" (404) od "već postoji ocjena" (409):
+ *   - { status: "not_found" }              -> film ili korisnik ne postoje
+ *   - { status: "duplicate" }               -> ocjena za taj par već postoji
+ *   - { status: "created", data: {...} }    -> uspješno upisano
+ *
+ * @param {{userId:number, movieId:number, rating:number}} data
+ * @returns {Promise<{status:string, data?:object}>}
+ */
+async function orientAddRating(data) {
+  const userId = Number(data.userId);
+  const movieId = Number(data.movieId);
+  const rating = Number(data.rating);
+
+  const session = await orientDbService.getOrientSession();
+  try {
+    const movieExists = await session
+      .query("SELECT FROM Movie WHERE movieId = :movieId LIMIT 1", {
+        params: { movieId },
+      })
+      .all();
+    if (!movieExists.length) {
+      return { status: "not_found" };
+    }
+
+    const userExists = await session
+      .query("SELECT FROM User WHERE userId = :userId LIMIT 1", {
+        params: { userId },
+      })
+      .all();
+    if (!userExists.length) {
+      return { status: "not_found" };
+    }
+
+    const ratingExists = await session
+      .query("SELECT FROM Rating WHERE movieId = :movieId AND userId = :userId LIMIT 1", {
+        params: { movieId, userId },
+      })
+      .all();
+    if (ratingExists.length) {
+      return { status: "duplicate" };
+    }
+
+    // Unix timestamp (sekunde) - Rating.timestamp u OrientDB šemi je
+    // numerički tip, pa ISO string izaziva "For input string" grešku.
+    const timestamp = Math.floor(Date.now() / 1000);
+    const result = await session
+      .command(
+        "INSERT INTO Rating SET userId = :userId, movieId = :movieId, rating = :rating, timestamp = :timestamp",
+        { params: { userId, movieId, rating, timestamp } }
+      )
+      .all();
+
+    return { status: "created", data: result[0] || { userId, movieId, rating, timestamp } };
+  } finally {
+    await session.close().catch(() => {});
+  }
+}
+
 module.exports = {
   ravendb: {
     getMovieById: ravenGetMovieById,
     getTopRatedMovies: ravenGetTopRatedMovies,
+    addMovie: ravenAddMovie,
+    addRating: ravenAddRating,
   },
   orientdb: {
     getMovieById: orientGetMovieById,
     getTopRatedMovies: orientGetTopRatedMovies,
+    addMovie: orientAddMovie,
+    addRating: orientAddRating,
   },
 };

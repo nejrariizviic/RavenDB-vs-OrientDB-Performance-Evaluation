@@ -22,4 +22,10 @@ router.get("/:dbEngine/top-rated", movieController.getTopRatedMovies);
 // GET /api/movies/:dbEngine/:id - JEDNOSTAVAN upit: pronađi film po ID-u
 router.get("/:dbEngine/:id", movieController.getMovieById);
 
+// POST /api/movies/:dbEngine - JEDNOSTAVAN upit: dodaj novi film
+router.post("/:dbEngine", movieController.addMovie);
+
+// POST /api/movies/:dbEngine/ratings - SLOŽEN upit: dodaj ocjenu SAMO ako korisnik i film već postoje
+router.post("/:dbEngine/ratings", movieController.addRating);
+
 module.exports = router;

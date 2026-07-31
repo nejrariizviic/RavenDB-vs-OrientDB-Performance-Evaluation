@@ -119,7 +119,138 @@ async function getTopRatedMovies(req, res, next) {
   }
 }
 
+// ==========================================
+// JEDNOSTAVAN POST UPIT - dodaj novi film
+// ==========================================
+
+/**
+ * POST /api/movies/:dbEngine
+ * :dbEngine -> "ravendb" ili "orientdb"
+ * body: { movieId: number, title: string, genres: string }
+ *
+ * Ako film sa istim movieId već postoji, vraća se 409 (bez upisa) - izmjena
+ * postojećeg filma je posebna PUT/PATCH operacija koja se radi naknadno.
+ */
+async function addMovie(req, res, next) {
+  try {
+    const { dbEngine } = req.params;
+
+    const service = resolveEngine(dbEngine);
+    if (!service) {
+      return res.status(400).json({
+        success: false,
+        message: `Nepoznat 'dbEngine': '${dbEngine}'. Dozvoljeno: ${SUPPORTED_ENGINES.join(", ")}.`,
+      });
+    }
+
+    const { movieId, title, genres } = req.body;
+    const parsedMovieId = Number(movieId);
+
+    if (!Number.isInteger(parsedMovieId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Polje 'movieId' mora biti cijeli broj." });
+    }
+    if (!title || typeof title !== "string") {
+      return res
+        .status(400)
+        .json({ success: false, message: "Polje 'title' je obavezno i mora biti string." });
+    }
+
+    const { result, tookMs } = await measure(() =>
+      service.addMovie({ movieId: parsedMovieId, title, genres })
+    );
+
+    if (result.status === "duplicate") {
+      return res.status(409).json({
+        success: false,
+        engine: dbEngine,
+        message: `Film sa movieId=${parsedMovieId} već postoji - koristite izmjenu (update) umjesto ponovnog dodavanja.`,
+      });
+    }
+
+    return res.status(201).json({ success: true, engine: dbEngine, tookMs, data: result.data });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ==========================================
+// SLOŽEN POST UPIT - dodaj ocjenu SAMO ako korisnik i film već postoje
+// ==========================================
+
+/**
+ * POST /api/movies/:dbEngine/ratings
+ * :dbEngine -> "ravendb" ili "orientdb"
+ * body: { userId: number, movieId: number, rating: number }
+ *
+ * Ocjena se upisuje SAMO ako i korisnik (userId) i film (movieId) već
+ * postoje (u suprotnom 404) i ako korisnik još nije ocijenio taj film
+ * (u suprotnom 409 - spriječava duplikate) - vidi movie.service.js za
+ * detalje provjere.
+ */
+async function addRating(req, res, next) {
+  try {
+    const { dbEngine } = req.params;
+
+    const service = resolveEngine(dbEngine);
+    if (!service) {
+      return res.status(400).json({
+        success: false,
+        message: `Nepoznat 'dbEngine': '${dbEngine}'. Dozvoljeno: ${SUPPORTED_ENGINES.join(", ")}.`,
+      });
+    }
+
+    const { userId, movieId, rating } = req.body;
+    const parsedUserId = Number(userId);
+    const parsedMovieId = Number(movieId);
+    const parsedRating = Number(rating);
+
+    if (!Number.isInteger(parsedUserId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Polje 'userId' mora biti cijeli broj." });
+    }
+    if (!Number.isInteger(parsedMovieId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Polje 'movieId' mora biti cijeli broj." });
+    }
+    if (!Number.isFinite(parsedRating) || parsedRating < 0.5 || parsedRating > 5) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Polje 'rating' mora biti broj u opsegu 0.5 - 5." });
+    }
+
+    const { result, tookMs } = await measure(() =>
+      service.addRating({ userId: parsedUserId, movieId: parsedMovieId, rating: parsedRating })
+    );
+
+    if (result.status === "not_found") {
+      return res.status(404).json({
+        success: false,
+        engine: dbEngine,
+        message: `Ocjena nije dodana - korisnik (userId=${parsedUserId}) i/ili film (movieId=${parsedMovieId}) ne postoje.`,
+      });
+    }
+
+    if (result.status === "duplicate") {
+      return res.status(409).json({
+        success: false,
+        engine: dbEngine,
+        message: `Korisnik (userId=${parsedUserId}) je već ocijenio film (movieId=${parsedMovieId}) - ocjena se ne može duplirati.`,
+      });
+    }
+
+    return res.status(201).json({ success: true, engine: dbEngine, tookMs, data: result.data });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getMovieById,
   getTopRatedMovies,
+  addMovie,
+  addRating,
 };
