@@ -176,6 +176,61 @@ async function addMovie(req, res, next) {
 }
 
 // ==========================================
+// JEDNOSTAVAN PUT UPIT - izmijeni naslov filma po movieId
+// ==========================================
+
+/**
+ * PUT /api/movies/:dbEngine/:id
+ * :dbEngine -> "ravendb" ili "orientdb"
+ * body: { title: string }
+ *
+ * Izmjenjuje SAMO naslov postojećeg filma (movieId služi isključivo za
+ * pronalaženje filma i ne mijenja se). Ako film sa datim movieId ne
+ * postoji, vraća se 404 (dodavanje novog filma je posebna POST operacija).
+ */
+async function updateMovieTitle(req, res, next) {
+  try {
+    const { dbEngine, id } = req.params;
+
+    const service = resolveEngine(dbEngine);
+    if (!service) {
+      return res.status(400).json({
+        success: false,
+        message: `Nepoznat 'dbEngine': '${dbEngine}'. Dozvoljeno: ${SUPPORTED_ENGINES.join(", ")}.`,
+      });
+    }
+
+    const movieId = Number(id);
+    if (!Number.isInteger(movieId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Parametar 'id' mora biti cijeli broj." });
+    }
+
+    const { title } = req.body;
+    if (!title || typeof title !== "string") {
+      return res
+        .status(400)
+        .json({ success: false, message: "Polje 'title' je obavezno i mora biti string." });
+    }
+
+    const { result, tookMs } = await measure(() => service.updateMovieTitle(movieId, title));
+
+    if (result.status === "not_found") {
+      return res.status(404).json({
+        success: false,
+        engine: dbEngine,
+        message: `Film sa ID ${movieId} nije pronađen - izmjena nije moguća.`,
+      });
+    }
+
+    return res.status(200).json({ success: true, engine: dbEngine, tookMs, data: result.data });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ==========================================
 // SLOŽEN POST UPIT - dodaj ocjenu SAMO ako korisnik i film već postoje
 // ==========================================
 
@@ -248,9 +303,79 @@ async function addRating(req, res, next) {
   }
 }
 
+// ==========================================
+// SLOŽEN PUT UPIT - korekcija ocjena za "aktivne" korisnike (>N ocjena)
+// ==========================================
+
+/**
+ * PUT /api/movies/:dbEngine/ratings/correction
+ * :dbEngine -> "ravendb" ili "orientdb"
+ * body: {
+ *   delta: number,        // vrijednost koja se dodaje svakoj ocjeni (može biti i negativna, npr. -0.5)
+ *   minRatings?: number   // prag za "aktivnog" korisnika - STROGO VIŠE od ove vrijednosti; default 100
+ * }
+ *
+ * "Aktivan" korisnik = korisnik koji je dao VIŠE OD minRatings ocjena (default 100,
+ * kako je i traženo). Korekcija (delta) se dodaje SVAKOJ ocjeni tih korisnika, a
+ * rezultat se ograničava (clamp) na validan MovieLens opseg 0.5 - 5.0 (vidi
+ * movie.service.js za implementaciju po engine-u).
+ */
+async function correctActiveUsersRatings(req, res, next) {
+  try {
+    const { dbEngine } = req.params;
+
+    const service = resolveEngine(dbEngine);
+    if (!service) {
+      return res.status(400).json({
+        success: false,
+        message: `Nepoznat 'dbEngine': '${dbEngine}'. Dozvoljeno: ${SUPPORTED_ENGINES.join(", ")}.`,
+      });
+    }
+
+    const { delta, minRatings } = req.body;
+    const parsedDelta = Number(delta);
+    const parsedMinRatings = minRatings !== undefined ? Number(minRatings) : 100;
+
+    if (!Number.isFinite(parsedDelta) || parsedDelta === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Polje 'delta' je obavezno, mora biti broj različit od 0 (npr. 0.5 ili -0.5).",
+      });
+    }
+    if (!Number.isInteger(parsedMinRatings) || parsedMinRatings < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Polje 'minRatings' mora biti nenegativan cijeli broj (podrazumijevano 100).",
+      });
+    }
+
+    const { result, tookMs } = await measure(() =>
+      service.correctActiveUsersRatings(parsedDelta, parsedMinRatings)
+    );
+
+    return res.status(200).json({
+      success: true,
+      engine: dbEngine,
+      tookMs,
+      message:
+        result.status === "no_active_users"
+          ? `Nema aktivnih korisnika sa više od ${parsedMinRatings} ocjena - ništa nije izmijenjeno.`
+          : `Korekcija (${parsedDelta > 0 ? "+" : ""}${parsedDelta}) primijenjena na ocjene aktivnih korisnika.`,
+      data: {
+        activeUsersCount: result.activeUsersCount,
+        updatedRatingsCount: result.updatedCount,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getMovieById,
   getTopRatedMovies,
   addMovie,
   addRating,
+  updateMovieTitle,
+  correctActiveUsersRatings,
 };

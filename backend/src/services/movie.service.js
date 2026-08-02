@@ -23,6 +23,19 @@ const orientDbService = require("./orientdb.service");
  * movieId (whereEquals), umjesto direktnog session.load().
  */
 
+/**
+ * Ograničava (clamp) ocjenu na validan MovieLens opseg [0.5, 5.0] nakon
+ * primjene korekcije (delta). Zajednička helper funkcija za RavenDB i
+ * OrientDB granu korekcije ocjena (vidi ravenCorrectActiveUsersRatings /
+ * orientCorrectActiveUsersRatings niže).
+ *
+ * @param {number} value
+ * @returns {number}
+ */
+function clampRating(value) {
+  return Math.min(5, Math.max(0.5, value));
+}
+
 // ==========================================
 // RAVENDB
 // ==========================================
@@ -211,6 +224,102 @@ async function ravenAddRating(data) {
     session.advanced.getMetadataFor(doc)["@collection"] = "Ratings";
     await session.saveChanges();
     return { status: "created", data: doc };
+  } finally {
+    session.dispose();
+  }
+}
+
+// ==========================================
+// JEDNOSTAVAN PUT UPIT - izmijeni naslov filma po movieId
+// ==========================================
+
+/**
+ * Izmjenjuje naslov postojećeg filma - učitava dokument po ključu
+ * "movies/{movieId}" (ista konvencija kao ravenGetMovieById), izmijeni
+ * polje title i sačuva promjenu.
+ *
+ * Dokument učitan preko session.load() je automatski "tracked" (praćen) od
+ * strane sesije, pa je dovoljno izmijeniti polje na JS objektu i pozvati
+ * saveChanges() - RavenDB sam detektuje razliku i šalje samo PATCH tog
+ * jednog dokumenta na server.
+ *
+ * @param {number} movieId
+ * @param {string} title
+ * @returns {Promise<{status:string, data?:object}>}
+ */
+async function ravenUpdateMovieTitle(movieId, title) {
+  const session = ravenDbService.openSession();
+  try {
+    const movie = await session.load(`movies/${movieId}`);
+    if (!movie) {
+      return { status: "not_found" };
+    }
+
+    movie.title = title;
+    await session.saveChanges();
+
+    return { status: "updated", data: movie };
+  } finally {
+    session.dispose();
+  }
+}
+
+// ==========================================
+// SLOŽEN PUT UPIT - korekcija ocjena za "aktivne" korisnike (>N ocjena)
+// ==========================================
+
+/**
+ * Izvodi bulk korekciju ocjena za "aktivne" korisnike (korisnici koji su dali
+ * STROGO VIŠE od minRatingsThreshold ocjena). Izvodi se u dva koraka:
+ *   1) RQL "group by" agregacija nad kolekcijom Ratings po userId - isti
+ *      idiom kao u ravenGetTopRatedMovies (count() u where/select dijelu
+ *      dinamičkog group by upita), samo ovdje se traže "aktivni" korisnici
+ *      umjesto najbolje ocijenjenih filmova.
+ *   2) Svi Ratings dokumenti tih korisnika (whereIn "userId") se učitavaju
+ *      kao "tracked" entiteti u istoj sesiji; korekcija (+ delta) i clamp
+ *      na opseg [0.5, 5.0] se rade u JS-u, a SVE promjene se šalju na
+ *      server u JEDNOM saveChanges() pozivu (RavenDB Unit-of-Work batching
+ *      - jedan HTTP zahtjev bez obzira na broj izmijenjenih dokumenata).
+ *
+ * @param {number} delta - vrijednost koja se dodaje svakoj ocjeni (može biti negativna)
+ * @param {number} [minRatingsThreshold=100] - prag za "aktivnog" korisnika (STROGO >)
+ * @returns {Promise<{status:string, activeUsersCount:number, updatedCount:number}>}
+ */
+async function ravenCorrectActiveUsersRatings(delta, minRatingsThreshold = 100) {
+  const session = ravenDbService.openSession();
+  try {
+    const activeUsers = await session.advanced
+      .rawQuery(
+        `from Ratings
+         group by userId
+         where count() > $minRatingsThreshold
+         select userId, count() as ratingCount`
+      )
+      .addParameter("minRatingsThreshold", minRatingsThreshold)
+      .all();
+
+    if (!activeUsers.length) {
+      return { status: "no_active_users", activeUsersCount: 0, updatedCount: 0 };
+    }
+
+    const activeUserIds = activeUsers.map((u) => u.userId);
+
+    const ratings = await session
+      .query({ collection: "Ratings" })
+      .whereIn("userId", activeUserIds)
+      .all();
+
+    ratings.forEach((r) => {
+      r.rating = clampRating(r.rating + delta);
+    });
+
+    await session.saveChanges();
+
+    return {
+      status: "corrected",
+      activeUsersCount: activeUserIds.length,
+      updatedCount: ratings.length,
+    };
   } finally {
     session.dispose();
   }
@@ -419,17 +528,142 @@ async function orientAddRating(data) {
   }
 }
 
+// ==========================================
+// JEDNOSTAVAN PUT UPIT - izmijeni naslov filma po movieId
+// ==========================================
+
+/**
+ * Izmjenjuje naslov postojećeg filma - provjerava da film sa datim movieId
+ * postoji, a zatim izvršava SET-based UPDATE nad tim jednim zapisom
+ * (indeksirano polje movieId, isti idiom kao orientGetMovieById).
+ *
+ * @param {number} movieId
+ * @param {string} title
+ * @returns {Promise<{status:string, data?:object}>}
+ */
+async function orientUpdateMovieTitle(movieId, title) {
+  const session = await orientDbService.getOrientSession();
+  try {
+    const existing = await session
+      .query("SELECT FROM Movie WHERE movieId = :movieId LIMIT 1", {
+        params: { movieId: Number(movieId) },
+      })
+      .all();
+    if (!existing.length) {
+      return { status: "not_found" };
+    }
+
+    await session
+      .command("UPDATE Movie SET title = :title WHERE movieId = :movieId", {
+        params: { title, movieId: Number(movieId) },
+      })
+      .all();
+
+    return {
+      status: "updated",
+      data: { movieId: Number(movieId), title, genres: existing[0].genres },
+    };
+  } finally {
+    await session.close().catch(() => {});
+  }
+}
+
+// ==========================================
+// SLOŽEN PUT UPIT - korekcija ocjena za "aktivne" korisnike (>N ocjena)
+// ==========================================
+
+/**
+ * Izvodi bulk korekciju ocjena za "aktivne" korisnike (korisnici koji su dali
+ * STROGO VIŠE od minRatingsThreshold ocjena). Izvodi se u dva koraka:
+ *   1) HAVING-like agregacija kroz vanjski SELECT nad podupitom (isti idiom
+ *      kao u orientGetTopRatedMovies), samo ovdje GROUP BY userId umjesto
+ *      movieId, da bi se pronašli "aktivni" korisnici.
+ *   2) JEDAN SET-based UPDATE nad Rating klasom (rating = rating + :delta)
+ *      za sve zapise čiji userId pripada listi aktivnih korisnika - bez
+ *      učitavanja pojedinačnih zapisa u memoriju (za razliku od RavenDB
+ *      grane, koja koristi Unit-of-Work/tracked-entity pristup preko
+ *      sesije). Ograničenje (clamp) na opseg [0.5, 5.0] se zatim izvodi
+ *      kroz dva dodatna, ciljana UPDATE upita (samo nad zapisima koji su
+ *      nakon korekcije ispali van dozvoljenog opsega).
+ *
+ * @param {number} delta - vrijednost koja se dodaje svakoj ocjeni (može biti negativna)
+ * @param {number} [minRatingsThreshold=100] - prag za "aktivnog" korisnika (STROGO >)
+ * @returns {Promise<{status:string, activeUsersCount:number, updatedCount:number}>}
+ */
+async function orientCorrectActiveUsersRatings(delta, minRatingsThreshold = 100) {
+  const session = await orientDbService.getOrientSession();
+  try {
+    const activeUsers = await session
+      .query(
+        `SELECT FROM (
+           SELECT userId, count(*) AS ratingCount
+           FROM Rating
+           GROUP BY userId
+         )
+         WHERE ratingCount > :minRatingsThreshold`,
+        { params: { minRatingsThreshold } }
+      )
+      .all();
+
+    if (!activeUsers.length) {
+      return { status: "no_active_users", activeUsersCount: 0, updatedCount: 0 };
+    }
+
+    const activeUserIds = activeUsers.map((u) => u.userId);
+
+    const updateResult = await session
+      .command("UPDATE Rating SET rating = rating + :delta WHERE userId IN :activeUserIds", {
+        params: { delta, activeUserIds },
+      })
+      .all();
+
+    // Clamp - dvije ciljane korekcije samo nad zapisima koji su nakon
+    // "+ delta" ispali van validnog MovieLens opsega (0.5 - 5.0).
+    await session
+      .command("UPDATE Rating SET rating = 5.0 WHERE userId IN :activeUserIds AND rating > 5", {
+        params: { activeUserIds },
+      })
+      .all();
+    await session
+      .command(
+        "UPDATE Rating SET rating = 0.5 WHERE userId IN :activeUserIds AND rating < 0.5",
+        { params: { activeUserIds } }
+      )
+      .all();
+
+    // OrientDB UPDATE komanda po defaultu koristi RETURN COUNT (broj
+    // izmijenjenih zapisa) - rezultat je jedan "wrapped" zapis čije se
+    // polje razlikuje po verziji servera ("count" ili "result"), otuda
+    // dvostruki fallback ispod.
+    const updatedCount =
+      (updateResult[0] && (updateResult[0].count ?? updateResult[0].result)) ??
+      updateResult.length;
+
+    return {
+      status: "corrected",
+      activeUsersCount: activeUserIds.length,
+      updatedCount,
+    };
+  } finally {
+    await session.close().catch(() => {});
+  }
+}
+
 module.exports = {
   ravendb: {
     getMovieById: ravenGetMovieById,
     getTopRatedMovies: ravenGetTopRatedMovies,
     addMovie: ravenAddMovie,
     addRating: ravenAddRating,
+    updateMovieTitle: ravenUpdateMovieTitle,
+    correctActiveUsersRatings: ravenCorrectActiveUsersRatings,
   },
   orientdb: {
     getMovieById: orientGetMovieById,
     getTopRatedMovies: orientGetTopRatedMovies,
     addMovie: orientAddMovie,
     addRating: orientAddRating,
+    updateMovieTitle: orientUpdateMovieTitle,
+    correctActiveUsersRatings: orientCorrectActiveUsersRatings,
   },
 };

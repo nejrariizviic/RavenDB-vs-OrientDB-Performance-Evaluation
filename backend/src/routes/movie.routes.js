@@ -28,4 +28,13 @@ router.post("/:dbEngine", movieController.addMovie);
 // POST /api/movies/:dbEngine/ratings - SLOŽEN upit: dodaj ocjenu SAMO ako korisnik i film već postoje
 router.post("/:dbEngine/ratings", movieController.addRating);
 
+// PUT /api/movies/:dbEngine/ratings/correction - SLOŽEN upit: korekcija ocjena
+// za "aktivne" korisnike (> minRatings ocjena, podrazumijevano 100).
+// Registrovano PRIJE "/:dbEngine/:id" iz istog razloga kao i "top-rated" kod
+// GET ruta (jasnoća/konvencija - konkretna akcija ide prije generičke rute).
+router.put("/:dbEngine/ratings/correction", movieController.correctActiveUsersRatings);
+
+// PUT /api/movies/:dbEngine/:id - JEDNOSTAVAN upit: izmijeni naslov filma po movieId
+router.put("/:dbEngine/:id", movieController.updateMovieTitle);
+
 module.exports = router;
