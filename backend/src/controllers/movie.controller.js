@@ -371,6 +371,135 @@ async function correctActiveUsersRatings(req, res, next) {
   }
 }
 
+// ==========================================
+// JEDNOSTAVAN DELETE UPIT - obriši jedan tag zapis
+// ==========================================
+
+/**
+ * DELETE /api/movies/:dbEngine/tags
+ * :dbEngine -> "ravendb" ili "orientdb"
+ * body: { userId: number, movieId: number, tag: string }
+ *
+ * Briše TAČNO JEDAN tag zapis koji odgovara datoj trojki
+ * (userId, movieId, tag) - to je prirodni složeni ključ jednog tag zapisa
+ * u MovieLens šemi (isti korisnik može dati VIŠE različitih tagova istom
+ * filmu, pa sam userId+movieId nije dovoljan da jednoznačno identifikuje
+ * jedan zapis - vidi movie.service.js za detalje).
+ */
+async function deleteTag(req, res, next) {
+  try {
+    const { dbEngine } = req.params;
+
+    const service = resolveEngine(dbEngine);
+    if (!service) {
+      return res.status(400).json({
+        success: false,
+        message: `Nepoznat 'dbEngine': '${dbEngine}'. Dozvoljeno: ${SUPPORTED_ENGINES.join(", ")}.`,
+      });
+    }
+
+    const { userId, movieId, tag } = req.body;
+    const parsedUserId = Number(userId);
+    const parsedMovieId = Number(movieId);
+
+    if (!Number.isInteger(parsedUserId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Polje 'userId' mora biti cijeli broj." });
+    }
+    if (!Number.isInteger(parsedMovieId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Polje 'movieId' mora biti cijeli broj." });
+    }
+    if (!tag || typeof tag !== "string") {
+      return res
+        .status(400)
+        .json({ success: false, message: "Polje 'tag' je obavezno i mora biti string." });
+    }
+
+    const { result, tookMs } = await measure(() =>
+      service.deleteTag({ userId: parsedUserId, movieId: parsedMovieId, tag })
+    );
+
+    if (result.status === "not_found") {
+      return res.status(404).json({
+        success: false,
+        engine: dbEngine,
+        message: `Tag zapis (userId=${parsedUserId}, movieId=${parsedMovieId}, tag="${tag}") nije pronađen.`,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      engine: dbEngine,
+      tookMs,
+      message: "Tag zapis uspješno obrisan.",
+      data: result.data,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ==========================================
+// SLOŽEN DELETE UPIT - "orphan cleanup": obriši ocjene filmova bez ijednog taga
+// ==========================================
+
+/**
+ * DELETE /api/movies/:dbEngine/ratings/orphan-cleanup?limit=10
+ * :dbEngine -> "ravendb" ili "orientdb"
+ *
+ * "Orphan cleanup": briše ocjene (Ratings) filmova koji NEMAJU nijedan tag.
+ * NAMJERNO ograničeno na najviše 10 obrisanih ocjena PO POZIVU (podrazumijevana
+ * i ujedno GORNJA granica za query parametar 'limit') - filmova bez ijednog
+ * taga ima mnogo, pa bi neograničeno brisanje u jednom pozivu obrisalo veliku
+ * većinu Ratings podataka odjednom i ostalo bi jako malo podataka za dalji
+ * benchmark. Endpoint je zamišljen da se po potrebi poziva više puta (npr.
+ * iz skripte), dok se ne vrati deletedCount = 0.
+ */
+async function deleteOrphanMovieRatings(req, res, next) {
+  try {
+    const { dbEngine } = req.params;
+
+    const service = resolveEngine(dbEngine);
+    if (!service) {
+      return res.status(400).json({
+        success: false,
+        message: `Nepoznat 'dbEngine': '${dbEngine}'. Dozvoljeno: ${SUPPORTED_ENGINES.join(", ")}.`,
+      });
+    }
+
+    const requestedLimit = req.query.limit !== undefined ? Number(req.query.limit) : 10;
+    if (!Number.isInteger(requestedLimit) || requestedLimit < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Query parametar 'limit' mora biti pozitivan cijeli broj.",
+      });
+    }
+    // Tvrda gornja granica od 10 po pozivu (vidi JSDoc gore) - čak i ako se
+    // pošalje veći 'limit', ne dozvoljava se prekoračenje.
+    const safeLimit = Math.min(requestedLimit, 10);
+
+    const { result, tookMs } = await measure(() =>
+      service.deleteOrphanMovieRatings(safeLimit)
+    );
+
+    return res.status(200).json({
+      success: true,
+      engine: dbEngine,
+      tookMs,
+      message:
+        result.status === "no_orphans"
+          ? "Nema više ocjena za filmove bez ijednog taga - nema šta da se obriše."
+          : `Obrisano ${result.deletedCount} ocjena (limit po pozivu: ${safeLimit}) za filmove bez ijednog taga.`,
+      data: { deletedCount: result.deletedCount, limit: safeLimit },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getMovieById,
   getTopRatedMovies,
@@ -378,4 +507,6 @@ module.exports = {
   addRating,
   updateMovieTitle,
   correctActiveUsersRatings,
+  deleteTag,
+  deleteOrphanMovieRatings,
 };

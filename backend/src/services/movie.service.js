@@ -12,11 +12,19 @@ const orientDbService = require("./orientdb.service");
  *   RavenDB kolekcija "Movies"  -> { movieId, title, genres }
  *                                  dokument ID po konvenciji: "movies/{movieId}"
  *   RavenDB kolekcija "Ratings" -> { movieId, userId, rating, timestamp }
+ *   RavenDB kolekcija "Tags"    -> { movieId, userId, tag, timestamp }
  *   RavenDB kolekcija "Users"   -> { userId }
  *
  *   OrientDB klasa "Movie"  -> { movieId, title, genres }
  *   OrientDB klasa "Rating" -> { movieId, userId, rating, timestamp }
+ *   OrientDB klasa "Tag"    -> { movieId, userId, tag, timestamp }
  *   OrientDB klasa "User"   -> { userId }
+ *
+ * NAPOMENA (Tags): baš kao ni Ratings, ni Tags dokumenti/zapisi nemaju
+ * jednoznačan poslovni ključ nalik movieId-u kod filmova - isti korisnik
+ * može istom filmu dodati VIŠE različitih tagova, pa se jedan konkretan
+ * tag zapis jednoznačno identifikuje TROJKOM (userId, movieId, tag) - vidi
+ * ravenDeleteTag / orientDeleteTag niže.
  *
  * Ako je u tvom modelu ID RavenDB dokumenta drugačiji (npr. auto-generisan
  * "movies/1-A"), ravenGetMovieById treba zamijeniti sa upitom po polju
@@ -320,6 +328,112 @@ async function ravenCorrectActiveUsersRatings(delta, minRatingsThreshold = 100) 
       activeUsersCount: activeUserIds.length,
       updatedCount: ratings.length,
     };
+  } finally {
+    session.dispose();
+  }
+}
+
+// ==========================================
+// JEDNOSTAVAN DELETE UPIT - obriši jedan tag zapis
+// ==========================================
+
+/**
+ * Briše TAČNO JEDAN tag zapis iz Tags kolekcije - direktan whereEquals
+ * lookup (bez agregacije/pod-upita) po trojki (userId, movieId, tag), koja
+ * jednoznačno identifikuje jedan zapis (vidi napomenu o Tags šemi na vrhu
+ * fajla). Ako zapis ne postoji, ništa se ne briše.
+ *
+ * VAŽNO: koristi se .firstOrNull() umjesto .first() - RavenDB Node.js
+ * klijent (v7.x) kod .first() BACA InvalidOperationException
+ * ("Expected at least one result.") ako upit ne vrati nijedan rezultat,
+ * umjesto da vrati null. .firstOrNull() je "sigurna" varijanta koja
+ * vraća null u tom slučaju, što nam ovdje treba za "not_found" granu.
+ *
+ * Povratna vrijednost je status-objekat:
+ *   - { status: "not_found" }             -> tag zapis sa datom trojkom ne postoji
+ *   - { status: "deleted", data: {...} }  -> uspješno obrisano
+ *
+ * @param {{userId:number, movieId:number, tag:string}} data
+ * @returns {Promise<{status:string, data?:object}>}
+ */
+async function ravenDeleteTag(data) {
+  const userId = Number(data.userId);
+  const movieId = Number(data.movieId);
+  const { tag } = data;
+
+  const session = ravenDbService.openSession();
+  try {
+    const existingTag = await session
+      .query({ collection: "Tags" })
+      .whereEquals("userId", userId)
+      .whereEquals("movieId", movieId)
+      .whereEquals("tag", tag)
+      .firstOrNull();
+
+    if (!existingTag) {
+      return { status: "not_found" };
+    }
+
+    session.delete(existingTag);
+    await session.saveChanges();
+
+    return { status: "deleted", data: existingTag };
+  } finally {
+    session.dispose();
+  }
+}
+
+// ==========================================
+// SLOŽEN DELETE UPIT - "orphan cleanup": obriši ocjene filmova bez ijednog taga
+// ==========================================
+
+/**
+ * Briše ocjene (Ratings) filmova koji NEMAJU nijedan tag u Tags kolekciji.
+ * Izvodi se u dva koraka:
+ *   1) RQL "group by" upit nad Tags kolekcijom (isti idiom kao kod
+ *      ravenGetTopRatedMovies/ravenCorrectActiveUsersRatings) da bi se
+ *      dobio skup SVIH movieId vrijednosti koje IMAJU bar jedan tag.
+ *   2) Ratings dokumenti čiji movieId NIJE u tom skupu (".not().whereIn()"
+ *      - RavenDB negacija sljedeće where klauzule, ekvivalent "NOT IN")
+ *      se učitavaju kao tracked entiteti (ograničeno na "limit" komada
+ *      preko ".take()") i brišu se u JEDNOM saveChanges() pozivu.
+ *
+ * NAMJERNO OGRANIČENO na "limit" (podrazumijevano i maksimalno 10, vidi
+ * movie.controller.js) obrisanih ocjena PO POZIVU, a ne odjednom svih -
+ * filmova bez ijednog taga u MovieLens dataset-u ima jako mnogo, pa bi
+ * neograničeno brisanje u jednom pozivu obrisalo ogromnu većinu Ratings
+ * podataka odjednom. Endpoint je zamišljen da se po potrebi poziva više
+ * puta (npr. iz skripte), dok se ne vrati deletedCount = 0.
+ *
+ * @param {number} limit - maksimalan broj ocjena za brisanje u ovom pozivu
+ * @returns {Promise<{status:string, deletedCount:number}>}
+ */
+async function ravenDeleteOrphanMovieRatings(limit = 10) {
+  const session = ravenDbService.openSession();
+  try {
+    const taggedStats = await session.advanced
+      .rawQuery(`from Tags group by movieId select movieId`)
+      .all();
+    const taggedMovieIds = taggedStats.map((s) => s.movieId);
+
+    // Ako baš NIJEDAN film u cijeloj bazi nema tag, ".not().whereIn()" sa
+    // praznim nizom se preskače - u tom slučaju je SVAKI film "orphan", pa
+    // se prosto uzima prvih "limit" zapisa iz cijele Ratings kolekcije.
+    let query = session.query({ collection: "Ratings" });
+    if (taggedMovieIds.length) {
+      query = query.not().whereIn("movieId", taggedMovieIds);
+    }
+
+    const orphanRatings = await query.take(limit).all();
+
+    if (!orphanRatings.length) {
+      return { status: "no_orphans", deletedCount: 0 };
+    }
+
+    orphanRatings.forEach((rating) => session.delete(rating));
+    await session.saveChanges();
+
+    return { status: "deleted", deletedCount: orphanRatings.length };
   } finally {
     session.dispose();
   }
@@ -649,6 +763,110 @@ async function orientCorrectActiveUsersRatings(delta, minRatingsThreshold = 100)
   }
 }
 
+// ==========================================
+// JEDNOSTAVAN DELETE UPIT - obriši jedan tag zapis
+// ==========================================
+
+/**
+ * Briše TAČNO JEDAN tag zapis iz Tag klase - direktan WHERE-lookup (bez
+ * agregacije/pod-upita) po trojki (userId, movieId, tag), koja jednoznačno
+ * identifikuje jedan zapis (vidi napomenu o Tags šemi na vrhu fajla).
+ * "LIMIT 1" u DELETE komandi je dodatna zaštita da se obriše najviše jedan
+ * zapis čak i u (teorijski mogućem) slučaju duplikata iste trojke.
+ *
+ * Povratna vrijednost je status-objekat:
+ *   - { status: "not_found" }             -> tag zapis sa datom trojkom ne postoji
+ *   - { status: "deleted", data: {...} }  -> uspješno obrisano
+ *
+ * @param {{userId:number, movieId:number, tag:string}} data
+ * @returns {Promise<{status:string, data?:object}>}
+ */
+async function orientDeleteTag(data) {
+  const userId = Number(data.userId);
+  const movieId = Number(data.movieId);
+  const { tag } = data;
+
+  const session = await orientDbService.getOrientSession();
+  try {
+    const existing = await session
+      .query(
+        "SELECT FROM Tag WHERE userId = :userId AND movieId = :movieId AND tag = :tag LIMIT 1",
+        { params: { userId, movieId, tag } }
+      )
+      .all();
+
+    if (!existing.length) {
+      return { status: "not_found" };
+    }
+
+    await session
+      .command(
+        "DELETE FROM Tag WHERE userId = :userId AND movieId = :movieId AND tag = :tag LIMIT 1",
+        { params: { userId, movieId, tag } }
+      )
+      .all();
+
+    return { status: "deleted", data: existing[0] };
+  } finally {
+    await session.close().catch(() => {});
+  }
+}
+
+// ==========================================
+// SLOŽEN DELETE UPIT - "orphan cleanup": obriši ocjene filmova bez ijednog taga
+// ==========================================
+
+/**
+ * Briše ocjene (Rating) filmova koji NEMAJU nijedan tag u Tag klasi.
+ * Izvodi se u dva koraka:
+ *   1) "SELECT DISTINCT movieId FROM Tag" - skup SVIH movieId vrijednosti
+ *      koje IMAJU bar jedan tag.
+ *   2) JEDAN SET-based DELETE nad Rating klasom (isti idiom kao u
+ *      orientCorrectActiveUsersRatings - bez učitavanja pojedinačnih
+ *      zapisa u memoriju) za zapise čiji movieId NIJE u tom skupu,
+ *      ograničeno LIMIT klauzulom na "limit" zapisa po pozivu.
+ *
+ * NAMJERNO OGRANIČENO na "limit" (podrazumijevano i maksimalno 10, vidi
+ * movie.controller.js) obrisanih ocjena PO POZIVU, a ne odjednom svih -
+ * filmova bez ijednog taga u MovieLens dataset-u ima jako mnogo, pa bi
+ * neograničeno brisanje u jednom pozivu obrisalo ogromnu većinu Rating
+ * podataka odjednom. Endpoint je zamišljen da se po potrebi poziva više
+ * puta (npr. iz skripte), dok se ne vrati deletedCount = 0.
+ *
+ * @param {number} limit - maksimalan broj ocjena za brisanje u ovom pozivu
+ * @returns {Promise<{status:string, deletedCount:number}>}
+ */
+async function orientDeleteOrphanMovieRatings(limit = 10) {
+  const session = await orientDbService.getOrientSession();
+  try {
+    const taggedStats = await session.query("SELECT DISTINCT movieId FROM Tag").all();
+    const taggedMovieIds = taggedStats.map((s) => s.movieId);
+
+    // Ako baš NIJEDAN film u cijeloj bazi nema tag, "NOT IN" filter se
+    // preskače - u tom slučaju je SVAKI film "orphan", pa se prosto briše
+    // prvih "limit" zapisa iz cijele Rating klase.
+    const deleteResult = taggedMovieIds.length
+      ? await session
+          .command(`DELETE FROM Rating WHERE movieId NOT IN :taggedMovieIds LIMIT ${limit}`, {
+            params: { taggedMovieIds },
+          })
+          .all()
+      : await session.command(`DELETE FROM Rating LIMIT ${limit}`).all();
+
+    // Isti "RETURN COUNT" dvostruki fallback kao u
+    // orientCorrectActiveUsersRatings (polje se razlikuje po verziji servera).
+    const deletedCount =
+      (deleteResult[0] && (deleteResult[0].count ?? deleteResult[0].result)) ?? 0;
+
+    return {
+      status: deletedCount > 0 ? "deleted" : "no_orphans",
+      deletedCount,
+    };
+  } finally {
+    await session.close().catch(() => {});
+  }
+}
+
 module.exports = {
   ravendb: {
     getMovieById: ravenGetMovieById,
@@ -657,6 +875,8 @@ module.exports = {
     addRating: ravenAddRating,
     updateMovieTitle: ravenUpdateMovieTitle,
     correctActiveUsersRatings: ravenCorrectActiveUsersRatings,
+    deleteTag: ravenDeleteTag,
+    deleteOrphanMovieRatings: ravenDeleteOrphanMovieRatings,
   },
   orientdb: {
     getMovieById: orientGetMovieById,
@@ -665,5 +885,7 @@ module.exports = {
     addRating: orientAddRating,
     updateMovieTitle: orientUpdateMovieTitle,
     correctActiveUsersRatings: orientCorrectActiveUsersRatings,
+    deleteTag: orientDeleteTag,
+    deleteOrphanMovieRatings: orientDeleteOrphanMovieRatings,
   },
 };

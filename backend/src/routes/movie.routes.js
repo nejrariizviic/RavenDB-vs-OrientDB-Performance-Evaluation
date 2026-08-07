@@ -37,4 +37,14 @@ router.put("/:dbEngine/ratings/correction", movieController.correctActiveUsersRa
 // PUT /api/movies/:dbEngine/:id - JEDNOSTAVAN upit: izmijeni naslov filma po movieId
 router.put("/:dbEngine/:id", movieController.updateMovieTitle);
 
+// DELETE /api/movies/:dbEngine/tags - JEDNOSTAVAN upit: obriši jedan tag zapis
+// (po trojki userId+movieId+tag iz body-ja)
+router.delete("/:dbEngine/tags", movieController.deleteTag);
+
+// DELETE /api/movies/:dbEngine/ratings/orphan-cleanup - SLOŽEN upit:
+// "orphan cleanup" - obriši ocjene za filmove bez ijednog taga,
+// max. 10 (podrazumijevano i tvrda gornja granica) po pozivu - vidi
+// movie.controller.js za obrazloženje limita.
+router.delete("/:dbEngine/ratings/orphan-cleanup", movieController.deleteOrphanMovieRatings);
+
 module.exports = router;
