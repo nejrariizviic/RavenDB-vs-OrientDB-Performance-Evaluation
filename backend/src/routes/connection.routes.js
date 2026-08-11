@@ -12,4 +12,9 @@ router.get("/ravendb", connectionController.checkRavenDbConnection);
 // GET /api/connection/orientdb - status OrientDB konekcije
 router.get("/orientdb", connectionController.checkOrientDbConnection);
 
+// GET /api/connection/session-cost/:dbEngine?runs=5 - trošak otvaranja/zatvaranja
+// JEDNE sesije/konekcije ka bazi, ponovljeno "runs" puta (podrazumijevano 5,
+// max 50) radi stabilnijeg prosjeka. Radi za obje baze (ravendb | orientdb).
+router.get("/session-cost/:dbEngine", connectionController.testSessionCost);
+
 module.exports = router;

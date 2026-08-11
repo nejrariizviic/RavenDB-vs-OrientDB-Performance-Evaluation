@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const morgan = require("morgan");
 const routes = require("./routes");
+const requestMetricsMiddleware = require("./middleware/requestMetrics.middleware");
 
 const app = express();
 
@@ -12,6 +13,10 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan("dev"));
+// Mjeri trajanje/CPU/RAM/konkurentnost SVAKOG zahtjeva (vidi
+// middleware/requestMetrics.middleware.js). Registrovano poslije morgan-a
+// (samo za dev log), ali PRIJE ruta, kako bi obuhvatio i 404/error slučajeve.
+app.use(requestMetricsMiddleware);
 
 // ==========================================
 // RUTE

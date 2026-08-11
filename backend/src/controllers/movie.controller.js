@@ -15,13 +15,57 @@ const movieService = require("../services/movie.service");
 const SUPPORTED_ENGINES = ["ravendb", "orientdb"];
 
 /**
- * Mjeri trajanje izvršavanja asinhrone funkcije u milisekundama.
+ * Mjeri trajanje, CPU i RAM SAMO oko poziva servisnom sloju (tj. SAMO oko
+ * stvarnog poziva bazi - ravendb.service.js / orientdb.service.js), bez
+ * Express routing/validacije oko njega. Ovo je uža, precizna metrika u
+ * odnosu na middleware/requestMetrics.middleware.js, koja mjeri CIJELI HTTP
+ * request (uključujući ovaj poziv, ali i sve oko njega).
+ *
+ * Koristi se identično za SVAKI od 8 osnovnih CRUD endpointa (4 operacije ×
+ * 2 baze: getMovieById, addMovie, updateMovieTitle, deleteTag - kao i za
+ * "složene" upite/operacije), tako da su rezultati direktno uporedivi
+ * RavenDB vs OrientDB (isti mehanizam mjerenja, mijenja se samo servis koji
+ * se poziva).
+ *
+ * - tookMs        -> trajanje poziva (process.hrtime, visoka preciznost)
+ * - cpuUserMs      -> CPU vrijeme u user modu POTROŠENO tokom poziva (delta)
+ * - cpuSystemMs    -> CPU vrijeme u kernel/system modu POTROŠENO tokom poziva (delta)
+ * - rssDeltaBytes  -> promjena rezidentne memorije Node procesa tokom poziva
+ * - heapUsedDeltaBytes -> promjena zauzetog V8 heap-a tokom poziva
+ *
+ * NAPOMENA o RAM delti: Node-ov garbage collector radi asinhrono/povremeno,
+ * pa negativna heap/rss delta (memorija se "smanjila") NIJE greška - GC je
+ * mogao pokupiti smeće baš tokom mjerenog poziva. Za stabilnije RAM brojeve
+ * gledati prosjek preko više ponovljenih poziva, ne pojedinačni zapis.
  */
 async function measure(fn) {
+  const memBefore = process.memoryUsage();
+  const cpuBefore = process.cpuUsage();
   const start = process.hrtime.bigint();
+
   const result = await fn();
+
   const tookMs = Number(process.hrtime.bigint() - start) / 1e6;
-  return { result, tookMs };
+  const cpuDelta = process.cpuUsage(cpuBefore); // { user, system } u mikrosekundama, DELTA
+  const memAfter = process.memoryUsage();
+
+  return {
+    result,
+    tookMs: Number(tookMs.toFixed(3)),
+    cpuUserMs: Number((cpuDelta.user / 1000).toFixed(3)),
+    cpuSystemMs: Number((cpuDelta.system / 1000).toFixed(3)),
+    rssDeltaBytes: memAfter.rss - memBefore.rss,
+    heapUsedDeltaBytes: memAfter.heapUsed - memBefore.heapUsed,
+  };
+}
+
+/**
+ * Izvlači "benchmark" polja iz rezultata measure() u zaseban objekat, radi
+ * dosljednog uključivanja u SVAKI JSON odgovor kontrolera (vidi upotrebu
+ * niže u svakoj handler funkciji).
+ */
+function toBenchmarkFields({ tookMs, cpuUserMs, cpuSystemMs, rssDeltaBytes, heapUsedDeltaBytes }) {
+  return { tookMs, cpuUserMs, cpuSystemMs, rssDeltaBytes, heapUsedDeltaBytes };
 }
 
 /**
@@ -64,7 +108,8 @@ async function getMovieById(req, res, next) {
         .json({ success: false, message: "Parametar 'id' mora biti cijeli broj." });
     }
 
-    const { result: movie, tookMs } = await measure(() => service.getMovieById(movieId));
+    const measured = await measure(() => service.getMovieById(movieId));
+    const movie = measured.result;
 
     if (!movie) {
       return res.status(404).json({
@@ -74,7 +119,9 @@ async function getMovieById(req, res, next) {
       });
     }
 
-    return res.status(200).json({ success: true, engine: dbEngine, tookMs, data: movie });
+    return res
+      .status(200)
+      .json({ success: true, engine: dbEngine, ...toBenchmarkFields(measured), data: movie });
   } catch (error) {
     next(error);
   }
@@ -103,14 +150,13 @@ async function getTopRatedMovies(req, res, next) {
     const limit = req.query.limit ? Number(req.query.limit) : 10;
     const minRatings = req.query.minRatings ? Number(req.query.minRatings) : 50;
 
-    const { result: movies, tookMs } = await measure(() =>
-      service.getTopRatedMovies(limit, minRatings)
-    );
+    const measured = await measure(() => service.getTopRatedMovies(limit, minRatings));
+    const movies = measured.result;
 
     return res.status(200).json({
       success: true,
       engine: dbEngine,
-      tookMs,
+      ...toBenchmarkFields(measured),
       count: movies.length,
       data: movies,
     });
@@ -157,9 +203,10 @@ async function addMovie(req, res, next) {
         .json({ success: false, message: "Polje 'title' je obavezno i mora biti string." });
     }
 
-    const { result, tookMs } = await measure(() =>
+    const measured = await measure(() =>
       service.addMovie({ movieId: parsedMovieId, title, genres })
     );
+    const result = measured.result;
 
     if (result.status === "duplicate") {
       return res.status(409).json({
@@ -169,7 +216,9 @@ async function addMovie(req, res, next) {
       });
     }
 
-    return res.status(201).json({ success: true, engine: dbEngine, tookMs, data: result.data });
+    return res
+      .status(201)
+      .json({ success: true, engine: dbEngine, ...toBenchmarkFields(measured), data: result.data });
   } catch (error) {
     next(error);
   }
@@ -214,7 +263,8 @@ async function updateMovieTitle(req, res, next) {
         .json({ success: false, message: "Polje 'title' je obavezno i mora biti string." });
     }
 
-    const { result, tookMs } = await measure(() => service.updateMovieTitle(movieId, title));
+    const measured = await measure(() => service.updateMovieTitle(movieId, title));
+    const result = measured.result;
 
     if (result.status === "not_found") {
       return res.status(404).json({
@@ -224,7 +274,9 @@ async function updateMovieTitle(req, res, next) {
       });
     }
 
-    return res.status(200).json({ success: true, engine: dbEngine, tookMs, data: result.data });
+    return res
+      .status(200)
+      .json({ success: true, engine: dbEngine, ...toBenchmarkFields(measured), data: result.data });
   } catch (error) {
     next(error);
   }
@@ -277,9 +329,10 @@ async function addRating(req, res, next) {
         .json({ success: false, message: "Polje 'rating' mora biti broj u opsegu 0.5 - 5." });
     }
 
-    const { result, tookMs } = await measure(() =>
+    const measured = await measure(() =>
       service.addRating({ userId: parsedUserId, movieId: parsedMovieId, rating: parsedRating })
     );
+    const result = measured.result;
 
     if (result.status === "not_found") {
       return res.status(404).json({
@@ -297,7 +350,9 @@ async function addRating(req, res, next) {
       });
     }
 
-    return res.status(201).json({ success: true, engine: dbEngine, tookMs, data: result.data });
+    return res
+      .status(201)
+      .json({ success: true, engine: dbEngine, ...toBenchmarkFields(measured), data: result.data });
   } catch (error) {
     next(error);
   }
@@ -349,14 +404,15 @@ async function correctActiveUsersRatings(req, res, next) {
       });
     }
 
-    const { result, tookMs } = await measure(() =>
+    const measured = await measure(() =>
       service.correctActiveUsersRatings(parsedDelta, parsedMinRatings)
     );
+    const result = measured.result;
 
     return res.status(200).json({
       success: true,
       engine: dbEngine,
-      tookMs,
+      ...toBenchmarkFields(measured),
       message:
         result.status === "no_active_users"
           ? `Nema aktivnih korisnika sa više od ${parsedMinRatings} ocjena - ništa nije izmijenjeno.`
@@ -418,9 +474,10 @@ async function deleteTag(req, res, next) {
         .json({ success: false, message: "Polje 'tag' je obavezno i mora biti string." });
     }
 
-    const { result, tookMs } = await measure(() =>
+    const measured = await measure(() =>
       service.deleteTag({ userId: parsedUserId, movieId: parsedMovieId, tag })
     );
+    const result = measured.result;
 
     if (result.status === "not_found") {
       return res.status(404).json({
@@ -433,7 +490,7 @@ async function deleteTag(req, res, next) {
     return res.status(200).json({
       success: true,
       engine: dbEngine,
-      tookMs,
+      ...toBenchmarkFields(measured),
       message: "Tag zapis uspješno obrisan.",
       data: result.data,
     });
@@ -481,14 +538,13 @@ async function deleteOrphanMovieRatings(req, res, next) {
     // pošalje veći 'limit', ne dozvoljava se prekoračenje.
     const safeLimit = Math.min(requestedLimit, 10);
 
-    const { result, tookMs } = await measure(() =>
-      service.deleteOrphanMovieRatings(safeLimit)
-    );
+    const measured = await measure(() => service.deleteOrphanMovieRatings(safeLimit));
+    const result = measured.result;
 
     return res.status(200).json({
       success: true,
       engine: dbEngine,
-      tookMs,
+      ...toBenchmarkFields(measured),
       message:
         result.status === "no_orphans"
           ? "Nema više ocjena za filmove bez ijednog taga - nema šta da se obriše."
