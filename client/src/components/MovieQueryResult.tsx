@@ -10,6 +10,8 @@
  *     data: { movieId, title, genres }
  *   }
  */
+import { EngineBadge } from "./EngineBadge";
+import { MetricsTable } from "./MetricsTable";
 
 interface Movie {
   movieId: number;
@@ -37,23 +39,9 @@ export function isMovieQuerySuccess(body: unknown): body is MovieQuerySuccess {
   const b = body as Record<string, unknown>;
   if (b.success !== true || typeof b.engine !== "string") return false;
   if (typeof b.tookMs !== "number") return false;
-  if (!b.data || typeof b.data !== "object") return false;
+  if (!b.data || typeof b.data !== "object" || Array.isArray(b.data)) return false;
   const data = b.data as Record<string, unknown>;
   return typeof data.movieId === "number" && typeof data.title === "string";
-}
-
-/** Formatira bajte (delta - može biti negativna) u čitljiv oblik (B/KB/MB). */
-function formatBytesDelta(bytes: number): string {
-  const sign = bytes > 0 ? "+" : bytes < 0 ? "-" : "";
-  const abs = Math.abs(bytes);
-  if (abs < 1024) return `${sign}${abs} B`;
-  const kb = abs / 1024;
-  if (kb < 1024) return `${sign}${kb.toFixed(1)} KB`;
-  return `${sign}${(kb / 1024).toFixed(2)} MB`;
-}
-
-function formatMs(value: number): string {
-  return `${value.toFixed(3)} ms`;
 }
 
 /**
@@ -71,27 +59,10 @@ function normalizeGenres(genres: Movie["genres"]): string[] {
     .filter((g) => g.length > 0 && g !== "(no genres listed)");
 }
 
-function EngineBadge({ engine }: { engine: string }) {
-  const isRaven = engine === "ravendb";
-  return (
-    <span className={`badge ${isRaven ? "badge-info" : "badge-warning"} badge-outline`}>
-      {isRaven ? "RavenDB" : engine === "orientdb" ? "OrientDB" : engine}
-    </span>
-  );
-}
-
 export function MovieQueryResult({ body }: { body: MovieQuerySuccess }) {
   const { engine, data, tookMs, cpuUserMs, cpuSystemMs, rssDeltaBytes, heapUsedDeltaBytes } = body;
 
   const genres = normalizeGenres(data.genres);
-
-  const metrics: Array<{ label: string; value: string; hint: string }> = [
-    { label: "Trajanje upita", value: formatMs(tookMs), hint: "process.hrtime, samo poziv bazi" },
-    { label: "CPU (user)", value: formatMs(cpuUserMs), hint: "CPU vrijeme u user modu" },
-    { label: "CPU (system)", value: formatMs(cpuSystemMs), hint: "CPU vrijeme u kernel modu" },
-    { label: "RSS memorija", value: formatBytesDelta(rssDeltaBytes), hint: "delta rezidentne memorije procesa" },
-    { label: "Heap memorija", value: formatBytesDelta(heapUsedDeltaBytes), hint: "delta zauzetog V8 heap-a" },
-  ];
 
   return (
     <div className="flex flex-col gap-6">
@@ -120,30 +91,13 @@ export function MovieQueryResult({ body }: { body: MovieQuerySuccess }) {
         </div>
       </div>
 
-      {/* Tabela metrika */}
-      <div>
-        <h3 className="text-sm font-semibold text-base-content/70 mb-2">Metrike upita</h3>
-        <div className="overflow-x-auto rounded-box border border-base-300">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Metrika</th>
-                <th>Vrijednost</th>
-                <th className="hidden sm:table-cell">Opis</th>
-              </tr>
-            </thead>
-            <tbody>
-              {metrics.map((m) => (
-                <tr key={m.label}>
-                  <td className="font-medium">{m.label}</td>
-                  <td className="font-mono">{m.value}</td>
-                  <td className="hidden sm:table-cell text-sm text-base-content/60">{m.hint}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <MetricsTable
+        tookMs={tookMs}
+        cpuUserMs={cpuUserMs}
+        cpuSystemMs={cpuSystemMs}
+        rssDeltaBytes={rssDeltaBytes}
+        heapUsedDeltaBytes={heapUsedDeltaBytes}
+      />
 
       {/* Sirov JSON - dostupan po potrebi, ali sklonjen s glavnog prikaza */}
       <details className="collapse collapse-arrow bg-base-200 border border-base-300">
