@@ -3,7 +3,7 @@ import { isMovieQuerySuccess, MovieQueryResult } from "./MovieQueryResult";
 import { isTopRatedQuerySuccess, TopRatedResult } from "./TopRatedResult";
 import { isRatingMutationSuccess, RatingQueryResult } from "./RatingQueryResult";
 import { RequestTypeSelector } from "./RequestTypeSelector";
-import { PlusIcon, StarIcon } from "./icons";
+import { PencilIcon, PlusIcon, StarIcon } from "./icons";
 import type { RequestKind } from "../lib/requestKind";
 
 interface ResponsePanelProps {
@@ -38,6 +38,8 @@ interface ResponsePanelProps {
   onOpenAddMovieModal: () => void;
   /** Otvara popup za SLOŽEN POST (dodaj ocjenu) - vidi AddRatingModal.tsx. */
   onOpenAddRatingModal: () => void;
+  /** Otvara popup za JEDNOSTAVAN PUT (izmijeni naslov filma) - vidi EditMovieModal.tsx. */
+  onOpenEditMovieModal: () => void;
 }
 
 function formatBody(body: unknown): string {
@@ -68,11 +70,13 @@ export function ResponsePanel({
   topRatedError,
   onOpenAddMovieModal,
   onOpenAddRatingModal,
+  onOpenEditMovieModal,
 }: ResponsePanelProps) {
-  // Za POST tipove (add-movie/add-rating) nema forme u ovom panelu (samo
-  // dugme koje otvara popup) - "prazno stanje" (još nema poslatog zahtjeva)
-  // se prikazuje umjesto sirovog "nema JSON tijela" placeholder-a.
-  const isMutationKind = requestKind === "add-movie" || requestKind === "add-rating";
+  // Za mutacije (add-movie/add-rating/edit-title) nema forme u ovom panelu
+  // (samo dugme koje otvara popup) - "prazno stanje" (još nema poslatog
+  // zahtjeva) se prikazuje umjesto sirovog "nema JSON tijela" placeholder-a.
+  const isMutationKind =
+    requestKind === "add-movie" || requestKind === "add-rating" || requestKind === "edit-title";
   const showEmptyMutationState = isMutationKind && status === null && !networkError && !loading;
 
   return (
@@ -171,6 +175,17 @@ export function ResponsePanel({
             Otvori formu za dodavanje ocjene
           </button>
         )}
+
+        {requestKind === "edit-title" && (
+          <button
+            type="button"
+            className="btn btn-sm btn-warning gap-1.5"
+            onClick={onOpenEditMovieModal}
+          >
+            <PencilIcon className="h-4 w-4" />
+            Otvori formu za izmjenu naslova
+          </button>
+        )}
       </div>
 
       {requestKind === "by-id" && movieIdError && (
@@ -204,13 +219,17 @@ export function ResponsePanel({
         <div className="rounded-box border border-dashed border-base-300 p-10 flex flex-col items-center gap-3 text-center text-base-content/60">
           {requestKind === "add-movie" ? (
             <PlusIcon className="h-8 w-8 opacity-40" />
-          ) : (
+          ) : requestKind === "add-rating" ? (
             <StarIcon className="h-8 w-8 opacity-40" />
+          ) : (
+            <PencilIcon className="h-8 w-8 opacity-40" />
           )}
           <p className="text-sm max-w-sm">
             {requestKind === "add-movie"
               ? "Još nema poslatog zahtjeva. Klikni na dugme iznad da dodaš novi film."
-              : "Još nema poslatog zahtjeva. Klikni na dugme iznad da dodaš novu ocjenu - korisnik i film moraju već postojati."}
+              : requestKind === "add-rating"
+                ? "Još nema poslatog zahtjeva. Klikni na dugme iznad da dodaš novu ocjenu - korisnik i film moraju već postojati."
+                : "Još nema poslatog zahtjeva. Klikni na dugme iznad da izmijeniš naslov postojećeg filma."}
           </p>
         </div>
       ) : (

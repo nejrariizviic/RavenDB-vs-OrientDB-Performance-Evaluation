@@ -82,6 +82,26 @@ export function FilmIcon({ className = "h-4 w-4" }: { className?: string }) {
   );
 }
 
+/** Ikonica olovke - koristi se za "Izmijeni naslov" (jednostavan PUT) u RequestTypeSelector.tsx i EditMovieModal.tsx. */
+export function PencilIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M16.86 4.14a1.94 1.94 0 0 1 2.75 2.75L8.5 18l-4.25 1.25L5.5 15z" />
+      <path d="m15.5 5.5 3 3" />
+    </svg>
+  );
+}
+
 /**
  * Puna (filled) zvjezdica - koristi se i kao ikonica za "Dodaj ocjenu" u
  * RequestTypeSelector.tsx, i kao gradivni blok za StarRating.tsx (birač i

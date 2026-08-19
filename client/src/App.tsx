@@ -3,6 +3,7 @@ import { Sidebar } from "./components/Sidebar";
 import { ResponsePanel } from "./components/ResponsePanel";
 import { AddMovieModal } from "./components/AddMovieModal";
 import { AddRatingModal } from "./components/AddRatingModal";
+import { EditMovieModal } from "./components/EditMovieModal";
 import { useApi } from "./hooks/useApi";
 import { useApiMutation } from "./hooks/useApiMutation";
 import { useLocalStorageState } from "./hooks/useLocalStorageState";
@@ -14,7 +15,7 @@ import {
   type DbEngine,
   type DbMode,
 } from "./lib/dbPreferences";
-import { DEFAULT_REQUEST_KIND, type RequestKind } from "./lib/requestKind";
+import { DEFAULT_REQUEST_KIND, REQUEST_KINDS, type RequestKind } from "./lib/requestKind";
 
 // movieId=1 -> "Toy Story (1995)" u standardnom MovieLens (ml-latest-small)
 // dataset-u - razuman podrazumijevani ID koji stvarno postoji.
@@ -42,6 +43,13 @@ const DEFAULT_ADD_MOVIE_ID = "200001";
 const DEFAULT_RATING_USER_ID = "1";
 const DEFAULT_RATING_MOVIE_ID = "2";
 const DEFAULT_RATING_VALUE = 4;
+
+// Podrazumijevana vrijednost za formu "izmijeni naslov filma" (JEDNOSTAVAN
+// PUT, u popup modalu) - namjerno ISTI movieId kao DEFAULT_MOVIE_ID (film
+// koji sigurno postoji u standardnom ml-latest-small dataset-u), da prvi
+// submit odmah uspije (200), a ne padne na 404 samo zato što je
+// podrazumijevani ID izmišljen.
+const DEFAULT_EDIT_MOVIE_ID = "1";
 
 function App() {
   const [dbEngine, setDbEngine] = useLocalStorageState<DbEngine>(
@@ -116,9 +124,28 @@ function App() {
     reset: resetAddRating,
   } = useApiMutation();
 
-  // NAPOMENA: "optimized" query parametar se šalje uz svaki zahtjev (GET i
-  // POST), ali ga BE trenutno NE čita/koristi (env.config.js ima samo JEDNU
-  // konfiguraciju po bazi, bez razlike optimizovano/neoptimizovano) -
+  // ---- JEDNOSTAVAN PUT: izmijeni naslov postojećeg filma po movieId
+  // (popup modal, vidi EditMovieModal.tsx) ----
+  // Isti pattern kao "dodaj novi film"/"dodaj ocjenu" iznad (nema
+  // Input/potvrđena razdvojenost - eksplicitan submit forme u modalu),
+  // ponovo koristi GENERIČKI useApiMutation hook (sad proširen da radi i
+  // PUT, ne samo POST - vidi hooks/useApiMutation.ts) - jedina razlika je
+  // koji se path/payload/metoda šalje.
+  const [isEditMovieModalOpen, setIsEditMovieModalOpen] = useState(false);
+  const [editMovieIdInput, setEditMovieIdInput] = useState(DEFAULT_EDIT_MOVIE_ID);
+  const [editMovieTitleInput, setEditMovieTitleInput] = useState("");
+  const [editMovieFormError, setEditMovieFormError] = useState<string | null>(null);
+  const {
+    result: editMovieResult,
+    error: editMovieNetworkError,
+    loading: editMovieLoading,
+    mutate: editMovieTitle,
+    reset: resetEditMovie,
+  } = useApiMutation();
+
+  // NAPOMENA: "optimized" query parametar se šalje uz svaki zahtjev (GET,
+  // POST i PUT), ali ga BE trenutno NE čita/koristi (env.config.js ima samo
+  // JEDNU konfiguraciju po bazi, bez razlike optimizovano/neoptimizovano) -
   // toggle je pripremljen na frontendu i spreman za kad se doda
   // odgovarajuća podrška na BE (npr. druga baza/indeksi po engine-u).
   const optimizedParam = `optimized=${dbMode === "optimized"}`;
@@ -138,27 +165,62 @@ function App() {
   // POST /api/movies/:dbEngine/ratings.
   const addRatingPath = `/movies/${dbEngine}/ratings?${optimizedParam}`;
 
+  // Path za PUT "izmijeni naslov filma" (JEDNOSTAVAN PUT) - vidi
+  // movie.routes.js: PUT /api/movies/:dbEngine/:id (ISTI path oblik kao GET
+  // po ID-u, vidi napomenu u movie.routes.js). Za razliku od addMoviePath/
+  // addRatingPath (ID ide kroz body, path je stabilan), ovdje movieId ide
+  // kroz SAMU putanju - zato je path izveden direktno iz trenutnog unosa
+  // (editMovieIdInput), tako da se i URL prikazan u ResponsePanel.tsx i
+  // dugme "Učitaj trenutni naslov" u modalu uvijek odnose na ID koji je
+  // trenutno upisan u polju (bez posebne "Input"/"potvrđena" razdvojenosti,
+  // isti duh kao kod addMoviePath/addRatingPath - eksplicitan submit).
+  const editMoviePath = `/movies/${dbEngine}/${editMovieIdInput.trim() || "-"}?${optimizedParam}`;
+
   // ---- Objedinjeno "šta se prikazuje u glavnom panelu" - zavisi od
   // trenutno odabranog requestKind-a. GET upiti (by-id/top-rated) koriste
-  // rezultat useApi hook-a iznad, dok POST upiti (add-movie/add-rating)
-  // koriste rezultat svog useApiMutation hook-a - ResponsePanel.tsx ne
-  // mora znati odakle dolazi, dobija samo jedan objedinjen skup polja. ----
+  // rezultat useApi hook-a iznad, dok mutacije (add-movie/add-rating/
+  // edit-title) koriste rezultat svog useApiMutation hook-a -
+  // ResponsePanel.tsx ne mora znati odakle dolazi, dobija samo jedan
+  // objedinjen skup polja. ----
   const isGetKind = requestKind === "by-id" || requestKind === "top-rated";
   const isAddMovieKind = requestKind === "add-movie";
+  const isAddRatingKind = requestKind === "add-rating";
+  // edit-title je implicitni "else" ogranak u ternary lancima ispod (nema
+  // sopstvene provjere jer je requestKind uvijek jedna od 5 poznatih
+  // vrijednosti - vidi lib/requestKind.ts).
 
-  const displayMethod = isGetKind ? "GET" : "POST";
+  // HTTP metoda se čita direktno iz REQUEST_KINDS metapodataka (jedan izvor
+  // istine, dijeli ga i RequestTypeSelector.tsx) umjesto ručnog grananja po
+  // svakom requestKind-u.
+  const displayMethod = REQUEST_KINDS.find((meta) => meta.kind === requestKind)?.method ?? "GET";
   const displayUrl = isGetKind
     ? `/api${path}`
     : isAddMovieKind
       ? `/api${addMoviePath}`
-      : `/api${addRatingPath}`;
-  const displayLoading = isGetKind ? loading : isAddMovieKind ? addMovieLoading : addRatingLoading;
+      : isAddRatingKind
+        ? `/api${addRatingPath}`
+        : `/api${editMoviePath}`;
+  const displayLoading = isGetKind
+    ? loading
+    : isAddMovieKind
+      ? addMovieLoading
+      : isAddRatingKind
+        ? addRatingLoading
+        : editMovieLoading;
   const displayNetworkError = isGetKind
     ? error
     : isAddMovieKind
       ? addMovieNetworkError
-      : addRatingNetworkError;
-  const displayResult = isGetKind ? result : isAddMovieKind ? addMovieResult : addRatingResult;
+      : isAddRatingKind
+        ? addRatingNetworkError
+        : editMovieNetworkError;
+  const displayResult = isGetKind
+    ? result
+    : isAddMovieKind
+      ? addMovieResult
+      : isAddRatingKind
+        ? addRatingResult
+        : editMovieResult;
 
   function handleMovieIdSubmit(parsedId: number) {
     setMovieIdError(null);
@@ -326,6 +388,50 @@ function App() {
     });
   }
 
+  function openEditMovieModal() {
+    // Svako otvaranje kreće "čisto" - prethodni rezultat (uspjeh/greška iz
+    // ranije sesije) se ne vuče u novi pokušaj.
+    setEditMovieFormError(null);
+    resetEditMovie();
+    setIsEditMovieModalOpen(true);
+  }
+
+  function closeEditMovieModal() {
+    setIsEditMovieModalOpen(false);
+  }
+
+  function handleEditAnotherMovie() {
+    setEditMovieFormError(null);
+    resetEditMovie();
+    // Predloži sljedeći ID (trenutni + 1) i očisti naslov, tako da korisnik
+    // može brzo izmijeniti sljedeći film bez ručnog mijenjanja ID-a - isti
+    // duh kao handleAddAnotherMovie/handleAddAnotherRating.
+    setEditMovieIdInput((prev) => String((Number(prev) || 0) + 1));
+    setEditMovieTitleInput("");
+  }
+
+  function handleEditMovieSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setEditMovieFormError(null);
+
+    const parsedId = Number(editMovieIdInput);
+    if (!Number.isInteger(parsedId) || parsedId < 1) {
+      setEditMovieFormError("ID filma mora biti pozitivan cijeli broj.");
+      return;
+    }
+
+    const trimmedTitle = editMovieTitleInput.trim();
+    if (!trimmedTitle) {
+      setEditMovieFormError("Novi naslov je obavezan.");
+      return;
+    }
+
+    // editMoviePath je već izveden iz editMovieIdInput (vidi definiciju
+    // iznad) - budući da je parsedId upravo taj isti unos, samo validiran,
+    // path se ovdje ne mora ponovo sastavljati.
+    void editMovieTitle(editMoviePath, { title: trimmedTitle }, "PUT");
+  }
+
   return (
     <div className="min-h-screen w-full flex bg-base-100 text-base-content">
       <Sidebar
@@ -333,7 +439,7 @@ function App() {
         onDbEngineChange={setDbEngine}
         dbMode={dbMode}
         onDbModeChange={setDbMode}
-        disabled={loading || addMovieLoading || addRatingLoading}
+        disabled={loading || addMovieLoading || addRatingLoading || editMovieLoading}
       />
       <ResponsePanel
         requestKind={requestKind}
@@ -356,6 +462,7 @@ function App() {
         onSubmit={handleSubmit}
         onOpenAddMovieModal={openAddMovieModal}
         onOpenAddRatingModal={openAddRatingModal}
+        onOpenEditMovieModal={openEditMovieModal}
       />
 
       <AddMovieModal
@@ -394,6 +501,24 @@ function App() {
         status={addRatingResult?.status ?? null}
         ok={addRatingResult?.ok ?? null}
         body={addRatingResult?.body}
+      />
+
+      <EditMovieModal
+        open={isEditMovieModalOpen}
+        onClose={closeEditMovieModal}
+        idInput={editMovieIdInput}
+        onIdInputChange={setEditMovieIdInput}
+        titleInput={editMovieTitleInput}
+        onTitleInputChange={setEditMovieTitleInput}
+        formError={editMovieFormError}
+        onSubmit={handleEditMovieSubmit}
+        onEditAnother={handleEditAnotherMovie}
+        loading={editMovieLoading}
+        networkError={editMovieNetworkError}
+        status={editMovieResult?.status ?? null}
+        ok={editMovieResult?.ok ?? null}
+        body={editMovieResult?.body}
+        lookupPath={editMoviePath}
       />
     </div>
   );

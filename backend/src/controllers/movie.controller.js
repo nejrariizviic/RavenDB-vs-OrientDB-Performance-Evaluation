@@ -387,9 +387,10 @@ async function correctActiveUsersRatings(req, res, next) {
       });
     }
 
-    const { delta, minRatings } = req.body;
+    const { delta, minRatings, maxActiveUsers } = req.body;
     const parsedDelta = Number(delta);
     const parsedMinRatings = minRatings !== undefined ? Number(minRatings) : 100;
+    const parsedMaxActiveUsers = maxActiveUsers !== undefined ? Number(maxActiveUsers) : null;
 
     if (!Number.isFinite(parsedDelta) || parsedDelta === 0) {
       return res.status(400).json({
@@ -403,9 +404,22 @@ async function correctActiveUsersRatings(req, res, next) {
         message: "Polje 'minRatings' mora biti nenegativan cijeli broj (podrazumijevano 100).",
       });
     }
+    // Opciono, SAMO za dev/testing - ograničava broj aktivnih korisnika čije se
+    // ocjene stvarno koriguju (vidi JSDoc u movie.service.js). Za "pravi",
+    // kompletan benchmark (npr. onaj koji se poredi sa/bez indeksa) izostaviti
+    // ovo polje - tada nema ograničenja, kao i do sad.
+    if (
+      maxActiveUsers !== undefined &&
+      (!Number.isInteger(parsedMaxActiveUsers) || parsedMaxActiveUsers < 1)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Polje 'maxActiveUsers' (opciono) mora biti pozitivan cijeli broj.",
+      });
+    }
 
     const measured = await measure(() =>
-      service.correctActiveUsersRatings(parsedDelta, parsedMinRatings)
+      service.correctActiveUsersRatings(parsedDelta, parsedMinRatings, parsedMaxActiveUsers)
     );
     const result = measured.result;
 
@@ -416,10 +430,13 @@ async function correctActiveUsersRatings(req, res, next) {
       message:
         result.status === "no_active_users"
           ? `Nema aktivnih korisnika sa više od ${parsedMinRatings} ocjena - ništa nije izmijenjeno.`
-          : `Korekcija (${parsedDelta > 0 ? "+" : ""}${parsedDelta}) primijenjena na ocjene aktivnih korisnika.`,
+          : `Korekcija (${parsedDelta > 0 ? "+" : ""}${parsedDelta}) primijenjena na ocjene aktivnih korisnika${
+              parsedMaxActiveUsers ? ` (ograničeno na ${parsedMaxActiveUsers} korisnika - dev test)` : ""
+            }.`,
       data: {
         activeUsersCount: result.activeUsersCount,
         updatedRatingsCount: result.updatedCount,
+        maxActiveUsers: parsedMaxActiveUsers,
       },
     });
   } catch (error) {

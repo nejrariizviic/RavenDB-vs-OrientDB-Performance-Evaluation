@@ -206,17 +206,10 @@ async function ravenAddRating(data) {
       return { status: "not_found" };
     }
 
-    // VAŽNO: .firstOrNull() umjesto .first() - RavenDB Node.js klijent kod
-    // .first() BACA InvalidOperationException ("Expected at least one
-    // result.") ako upit ne vrati nijedan rezultat, umjesto da vrati null
-    // (isti razlog kao kod ravenDeleteTag niže u ovom fajlu). Bez ovoga bi
-    // SVAKI pokušaj dodavanja ocjene padao sa 500 čim korisnik ili ocjena
-    // ne bi bili pronađeni - a to je upravo normalan slučaj koji ovaj upit
-    // treba da obradi kao "not_found"/nastavi dalje, a ne da puca.
     const existingUser = await session
       .query({ collection: "Users" })
       .whereEquals("userId", userId)
-      .firstOrNull();
+      .first();
     if (!existingUser) {
       return { status: "not_found" };
     }
@@ -225,7 +218,7 @@ async function ravenAddRating(data) {
       .query({ collection: "Ratings" })
       .whereEquals("movieId", movieId)
       .whereEquals("userId", userId)
-      .firstOrNull();
+      .first();
     if (existingRating) {
       return { status: "duplicate" };
     }
@@ -298,12 +291,18 @@ async function ravenUpdateMovieTitle(movieId, title) {
  *
  * @param {number} delta - vrijednost koja se dodaje svakoj ocjeni (može biti negativna)
  * @param {number} [minRatingsThreshold=100] - prag za "aktivnog" korisnika (STROGO >)
+ * @param {number|null} [maxActiveUsers=null] - DEV/testing safeguard, vidi JSDoc kod
+ *   orientCorrectActiveUsersRatings. Ovdje se primjenjuje u JS-u (sort + slice), poslije
+ *   agregacije, iz istog razloga kao ravenGetTopRatedMovies (RavenDB RQL group-by upiti
+ *   ne podržavaju ORDER BY po proizvoljnoj koloni unutar samog agregacionog upita).
+ *   Sortirano po userId radi determinizma - isti korisnici pri ponovljenim pozivima,
+ *   i isti skup kao kod OrientDB varijante za fer poređenje kad je limit uključen.
  * @returns {Promise<{status:string, activeUsersCount:number, updatedCount:number}>}
  */
-async function ravenCorrectActiveUsersRatings(delta, minRatingsThreshold = 100) {
+async function ravenCorrectActiveUsersRatings(delta, minRatingsThreshold = 100, maxActiveUsers = null) {
   const session = ravenDbService.openSession();
   try {
-    const activeUsers = await session.advanced
+    let activeUsers = await session.advanced
       .rawQuery(
         `from Ratings
          group by userId
@@ -315,6 +314,14 @@ async function ravenCorrectActiveUsersRatings(delta, minRatingsThreshold = 100) 
 
     if (!activeUsers.length) {
       return { status: "no_active_users", activeUsersCount: 0, updatedCount: 0 };
+    }
+
+    if (maxActiveUsers !== null && maxActiveUsers !== undefined) {
+      const safeMaxActiveUsers = Math.max(1, Math.floor(Number(maxActiveUsers)));
+      activeUsers = activeUsers
+        .slice()
+        .sort((a, b) => a.userId - b.userId)
+        .slice(0, safeMaxActiveUsers);
     }
 
     const activeUserIds = activeUsers.map((u) => u.userId);
@@ -709,11 +716,30 @@ async function orientUpdateMovieTitle(movieId, title) {
  *
  * @param {number} delta - vrijednost koja se dodaje svakoj ocjeni (može biti negativna)
  * @param {number} [minRatingsThreshold=100] - prag za "aktivnog" korisnika (STROGO >)
+ * @param {number|null} [maxActiveUsers=null] - DEV/testing safeguard: ograničava BROJ
+ *   aktivnih korisnika čije se ocjene zapravo koriguju (ne utiče na GROUP BY sken, koji
+ *   mora proći kroz cijelu Rating klasu bez obzira - to je i poanta poređenja bez indeksa).
+ *   Bez ovoga, UPDATE ... WHERE userId IN (:activeUserIds) radi linear scan cijele Rating
+ *   klase i za SVAKI zapis provjerava pripadnost (potencijalno) hiljadama userId vrijednosti
+ *   - O(brojZapisa * brojAktivnihKorisnika), što na OrientDB-u bez indeksa realno može
+ *   opteretiti mašinu. null/0 = bez ograničenja (kompletan, "pravi" benchmark).
  * @returns {Promise<{status:string, activeUsersCount:number, updatedCount:number}>}
  */
-async function orientCorrectActiveUsersRatings(delta, minRatingsThreshold = 100) {
+async function orientCorrectActiveUsersRatings(delta, minRatingsThreshold = 100, maxActiveUsers = null) {
   const session = await orientDbService.getOrientSession();
   try {
+    // LIMIT se namjerno ubacuje kao inline broj (isti idiom kao u
+    // orientGetTopRatedMovies) - OrientDB SQL ne dozvoljava bind parametar
+    // unutar LIMIT klauzule. ORDER BY userId je ovdje da bi ograničen skup
+    // aktivnih korisnika bio DETERMINISTIČAN (isti korisnici pri ponovljenim
+    // pozivima), inače bi GROUP BY bez indeksa mogao vratiti proizvoljan
+    // redoslijed i test ne bi bio ponovljiv.
+    const safeMaxActiveUsers =
+      maxActiveUsers !== null && maxActiveUsers !== undefined
+        ? Math.max(1, Math.floor(Number(maxActiveUsers)))
+        : null;
+    const limitClause = safeMaxActiveUsers ? `ORDER BY userId LIMIT ${safeMaxActiveUsers}` : "";
+
     const activeUsers = await session
       .query(
         `SELECT FROM (
@@ -721,7 +747,8 @@ async function orientCorrectActiveUsersRatings(delta, minRatingsThreshold = 100)
            FROM Rating
            GROUP BY userId
          )
-         WHERE ratingCount > :minRatingsThreshold`,
+         WHERE ratingCount > :minRatingsThreshold
+         ${limitClause}`,
         { params: { minRatingsThreshold } }
       )
       .all();

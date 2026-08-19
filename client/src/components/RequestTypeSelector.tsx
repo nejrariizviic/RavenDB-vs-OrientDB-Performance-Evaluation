@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { FilmIcon, SearchIcon, StarIcon, TrophyIcon } from "./icons";
+import { FilmIcon, PencilIcon, SearchIcon, StarIcon, TrophyIcon } from "./icons";
 import { REQUEST_KINDS, type RequestKind } from "../lib/requestKind";
 
 interface RequestTypeSelectorProps {
@@ -13,27 +13,35 @@ const ICON_BY_KIND: Record<RequestKind, ComponentType<{ className?: string }>> =
   "top-rated": TrophyIcon,
   "add-movie": FilmIcon,
   "add-rating": StarIcon,
+  "edit-title": PencilIcon,
+};
+
+/** Boja bedža po HTTP metodi - GET plavo, POST zeleno, PUT žuto/narandžasto (uobičajena REST konvencija). */
+const BADGE_CLASS_BY_METHOD: Record<(typeof REQUEST_KINDS)[number]["method"], string> = {
+  GET: "badge-info",
+  POST: "badge-success",
+  PUT: "badge-warning",
 };
 
 /**
  * Vizuelni birač tipa zahtjeva - zamjenjuje ranije "obične" boxed tabove
  * (QueryTypeTabs.tsx, koji je pokrivao samo 2 GET upita) kartičnim
- * prikazom SVA ČETIRI demonstrirana zahtjeva (2x GET, 2x POST). Svaka
- * kartica nosi HTTP metodu (bedž), ikonicu, naslov, kratak opis i oznaku
- * jednostavan/složen - tako se odmah vidi ŠTA upit radi, umjesto pukog
- * naslova taba.
+ * prikazom SVIH PET demonstriranih zahtjeva (2x GET, 2x POST, 1x PUT).
+ * Svaka kartica nosi HTTP metodu (bedž), ikonicu, naslov, kratak opis i
+ * oznaku jednostavan/složen - tako se odmah vidi ŠTA upit radi, umjesto
+ * pukog naslova taba.
  *
  * Odabrana kartica ne šalje ništa sama od sebe: za GET upite (by-id,
  * top-rated) ResponsePanel.tsx ispod i dalje prikazuje pripadajuću formu za
- * potvrdu parametara, a za POST upite (add-movie, add-rating) prikazuje
- * dugme koje otvara odgovarajući popup (vidi App.tsx).
+ * potvrdu parametara, a za mutacije (add-movie, add-rating, edit-title)
+ * prikazuje dugme koje otvara odgovarajući popup (vidi App.tsx).
  */
 export function RequestTypeSelector({ value, onChange, disabled }: RequestTypeSelectorProps) {
   return (
     <div
       role="tablist"
       aria-label="Tip zahtjeva"
-      className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6"
+      className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-6"
     >
       {REQUEST_KINDS.map((meta) => {
         const Icon = ICON_BY_KIND[meta.kind];
@@ -53,11 +61,7 @@ export function RequestTypeSelector({ value, onChange, disabled }: RequestTypeSe
             }`}
           >
             <div className="flex items-center justify-between">
-              <span
-                className={`badge badge-sm badge-outline ${
-                  meta.method === "GET" ? "badge-info" : "badge-success"
-                }`}
-              >
+              <span className={`badge badge-sm badge-outline ${BADGE_CLASS_BY_METHOD[meta.method]}`}>
                 {meta.method}
               </span>
               <Icon className={`h-5 w-5 ${isActive ? "text-primary" : "text-base-content/40"}`} />

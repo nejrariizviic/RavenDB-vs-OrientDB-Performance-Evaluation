@@ -58,3 +58,31 @@ export async function apiPost<T = unknown>(
 
   return { status: res.status, ok: res.ok, body };
 }
+
+/**
+ * Šalje PUT zahtjev ka BE-u sa JSON tijelom - ISTA semantika kao apiPost
+ * (vidi napomenu iznad), samo druga HTTP metoda. Koristi se za "izmijeni
+ * naslov filma po movieId" (vidi movie.controller.js -> updateMovieTitle):
+ * ne baca grešku na 4xx/5xx (npr. 404 kad film sa datim movieId ne
+ * postoji), taj odgovor treba prikazati korisniku u cijelosti. Greška se
+ * baca SAMO ako zahtjev nije uspio da stigne do servera.
+ */
+export async function apiPut<T = unknown>(
+  path: string,
+  payload: unknown
+): Promise<ApiResult<T>> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  let body: T;
+  try {
+    body = (await res.json()) as T;
+  } catch {
+    body = null as T;
+  }
+
+  return { status: res.status, ok: res.ok, body };
+}

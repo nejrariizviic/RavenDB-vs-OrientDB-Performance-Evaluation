@@ -1,5 +1,5 @@
 /**
- * Zajednički tip i metapodaci za SVA ČETIRI demonstrirana zahtjeva ka BE-u -
+ * Zajednički tip i metapodaci za SVIH PET demonstriranih zahtjeva ka BE-u -
  * koristi ih RequestTypeSelector.tsx (vizuelni birač u glavnom panelu) i
  * App.tsx (za odlučivanje koja forma / koji odgovor se prikazuje):
  *
@@ -7,24 +7,25 @@
  * - "top-rated"  -> SLOŽEN GET:       Top N filmova po prosječnoj ocjeni
  * - "add-movie"  -> JEDNOSTAVAN POST: dodaj novi film
  * - "add-rating" -> SLOŽEN POST:      dodaj ocjenu SAMO ako korisnik i film već postoje
+ * - "edit-title" -> JEDNOSTAVAN PUT:  izmijeni naslov postojećeg filma po movieId
  *
  * Zamjenjuje raniji lib/queryType.ts (koji je pokrivao samo prva dva GET
  * upita) - "dodaj novi film" je ranije bio zaseban popup otvoren dugmetom sa
- * "by-id" kartice, a sad je i on (zajedno sa novim "dodaj ocjenu") punopravna
- * stavka u istom vizuelnom biraču, umjesto običnih tabova.
+ * "by-id" kartice, a sad je i on (zajedno sa "dodaj ocjenu" i "izmijeni
+ * naslov") punopravna stavka u istom vizuelnom biraču, umjesto običnih
+ * tabova.
  *
  * NAPOMENA: ovaj izbor se NAMJERNO ne pamti u localStorage-u (za razliku od
- * dbEngine/dbMode u lib/dbPreferences.ts) - to je samo prekidač između
- * četiri demo prikaza unutar iste sesije, a ne korisnička preferenca vezana
- * za bazu.
+ * dbEngine/dbMode u lib/dbPreferences.ts) - to je samo prekidač između pet
+ * demo prikaza unutar iste sesije, a ne korisnička preferenca vezana za bazu.
  */
-export type RequestKind = "by-id" | "top-rated" | "add-movie" | "add-rating";
+export type RequestKind = "by-id" | "top-rated" | "add-movie" | "add-rating" | "edit-title";
 
 export const DEFAULT_REQUEST_KIND: RequestKind = "by-id";
 
 export interface RequestKindMeta {
   kind: RequestKind;
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "PUT";
   title: string;
   description: string;
   complexity: "simple" | "complex";
@@ -32,7 +33,7 @@ export interface RequestKindMeta {
 
 /**
  * Redoslijed ovdje određuje redoslijed kartica u RequestTypeSelector.tsx -
- * namjerno GET pa POST, i unutar svake grupe jednostavan pa složen upit.
+ * namjerno GET pa POST pa PUT, i unutar svake grupe jednostavan pa složen upit.
  */
 export const REQUEST_KINDS: RequestKindMeta[] = [
   {
@@ -62,5 +63,12 @@ export const REQUEST_KINDS: RequestKindMeta[] = [
     title: "Dodaj ocjenu",
     description: "Dodaje ocjenu SAMO ako korisnik i film već postoje.",
     complexity: "complex",
+  },
+  {
+    kind: "edit-title",
+    method: "PUT",
+    title: "Izmijeni naslov",
+    description: "Ažurira naslov postojećeg filma po movieId - odbija nepostojeći film (404).",
+    complexity: "simple",
   },
 ];
