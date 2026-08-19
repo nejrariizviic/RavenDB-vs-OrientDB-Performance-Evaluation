@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ResponsePanel } from "./components/ResponsePanel";
 import { AddMovieModal } from "./components/AddMovieModal";
+import { AddRatingModal } from "./components/AddRatingModal";
 import { useApi } from "./hooks/useApi";
 import { useApiMutation } from "./hooks/useApiMutation";
 import { useLocalStorageState } from "./hooks/useLocalStorageState";
@@ -13,7 +14,7 @@ import {
   type DbEngine,
   type DbMode,
 } from "./lib/dbPreferences";
-import { DEFAULT_QUERY_TYPE, type QueryType } from "./lib/queryType";
+import { DEFAULT_REQUEST_KIND, type RequestKind } from "./lib/requestKind";
 
 // movieId=1 -> "Toy Story (1995)" u standardnom MovieLens (ml-latest-small)
 // dataset-u - razuman podrazumijevani ID koji stvarno postoji.
@@ -31,6 +32,17 @@ const DEFAULT_MIN_RATINGS = "50";
 // podrazumijevani ID slučajno zauzet.
 const DEFAULT_ADD_MOVIE_ID = "200001";
 
+// Podrazumijevane vrijednosti za formu "dodaj ocjenu" (SLOŽEN POST, u popup
+// modalu) - userId i movieId koji VJEROVATNO postoje u standardnom
+// ml-latest-small dataset-u (korisnici 1-610, movieId=2 "Jumanji (1995)"),
+// tako da prvi submit najčešće odmah uspije (201). Ako je baš ta
+// kombinacija userId+movieId već ocijenjena, BE će to prijaviti kao 409
+// (duplikat) - i to je i dalje koristan prikaz ponašanja ovog upita
+// (demonstrira tačno onu provjeru zbog koje je upit "složen").
+const DEFAULT_RATING_USER_ID = "1";
+const DEFAULT_RATING_MOVIE_ID = "2";
+const DEFAULT_RATING_VALUE = 4;
+
 function App() {
   const [dbEngine, setDbEngine] = useLocalStorageState<DbEngine>(
     DB_ENGINE_STORAGE_KEY,
@@ -41,9 +53,12 @@ function App() {
     DEFAULT_DB_MODE
   );
 
-  // Prekidač između JEDNOSTAVNOG (film po ID-u) i SLOŽENOG (Top N po ocjeni)
-  // GET upita - NIJE u localStorage-u, vidi lib/queryType.ts.
-  const [queryType, setQueryType] = useState<QueryType>(DEFAULT_QUERY_TYPE);
+  // Prekidač između sva ČETIRI demonstrirana zahtjeva (2x GET, 2x POST) -
+  // vidi lib/requestKind.ts. NIJE u localStorage-u (isti razlog kao ranije
+  // "queryType" prekidač koji je ovo zamijenio - samo je sad proširen sa 2
+  // na 4 vrijednosti, jer su "dodaj film" i novi "dodaj ocjenu" sad
+  // punopravne stavke u istom vizuelnom biraču, a ne skriveni popup).
+  const [requestKind, setRequestKind] = useState<RequestKind>(DEFAULT_REQUEST_KIND);
 
   // ---- JEDNOSTAVAN GET: film po ID-u ----
   // "movieIdInput" prati šta korisnik trenutno kuca u polju, "movieId" je
@@ -82,6 +97,25 @@ function App() {
     reset: resetAddMovie,
   } = useApiMutation();
 
+  // ---- SLOŽEN POST: dodaj ocjenu SAMO ako korisnik i film već postoje
+  // (popup modal, vidi AddRatingModal.tsx) ----
+  // Isti pattern kao "dodaj novi film" iznad (nema Input/potvrđena
+  // razdvojenost - eksplicitan submit forme u modalu), ponovo koristi
+  // GENERIČKI useApiMutation hook (isti kao za addMovie) - jedina razlika
+  // je koji se path/payload šalje.
+  const [isAddRatingModalOpen, setIsAddRatingModalOpen] = useState(false);
+  const [addRatingUserIdInput, setAddRatingUserIdInput] = useState(DEFAULT_RATING_USER_ID);
+  const [addRatingMovieIdInput, setAddRatingMovieIdInput] = useState(DEFAULT_RATING_MOVIE_ID);
+  const [addRatingValue, setAddRatingValue] = useState(DEFAULT_RATING_VALUE);
+  const [addRatingFormError, setAddRatingFormError] = useState<string | null>(null);
+  const {
+    result: addRatingResult,
+    error: addRatingNetworkError,
+    loading: addRatingLoading,
+    mutate: addRating,
+    reset: resetAddRating,
+  } = useApiMutation();
+
   // NAPOMENA: "optimized" query parametar se šalje uz svaki zahtjev (GET i
   // POST), ali ga BE trenutno NE čita/koristi (env.config.js ima samo JEDNU
   // konfiguraciju po bazi, bez razlike optimizovano/neoptimizovano) -
@@ -90,7 +124,7 @@ function App() {
   const optimizedParam = `optimized=${dbMode === "optimized"}`;
 
   const path =
-    queryType === "by-id"
+    requestKind === "by-id"
       ? `/movies/${dbEngine}/${movieId}?${optimizedParam}`
       : `/movies/${dbEngine}/top-rated?limit=${limit}&minRatings=${minRatings}&${optimizedParam}`;
 
@@ -99,6 +133,32 @@ function App() {
   // Path za POST "dodaj novi film" - zaseban od GET path-a iznad jer se ne
   // šalje automatski, nego samo preko mutate() na submit u modalu.
   const addMoviePath = `/movies/${dbEngine}?${optimizedParam}`;
+
+  // Path za POST "dodaj ocjenu" (SLOŽEN POST) - vidi movie.routes.js:
+  // POST /api/movies/:dbEngine/ratings.
+  const addRatingPath = `/movies/${dbEngine}/ratings?${optimizedParam}`;
+
+  // ---- Objedinjeno "šta se prikazuje u glavnom panelu" - zavisi od
+  // trenutno odabranog requestKind-a. GET upiti (by-id/top-rated) koriste
+  // rezultat useApi hook-a iznad, dok POST upiti (add-movie/add-rating)
+  // koriste rezultat svog useApiMutation hook-a - ResponsePanel.tsx ne
+  // mora znati odakle dolazi, dobija samo jedan objedinjen skup polja. ----
+  const isGetKind = requestKind === "by-id" || requestKind === "top-rated";
+  const isAddMovieKind = requestKind === "add-movie";
+
+  const displayMethod = isGetKind ? "GET" : "POST";
+  const displayUrl = isGetKind
+    ? `/api${path}`
+    : isAddMovieKind
+      ? `/api${addMoviePath}`
+      : `/api${addRatingPath}`;
+  const displayLoading = isGetKind ? loading : isAddMovieKind ? addMovieLoading : addRatingLoading;
+  const displayNetworkError = isGetKind
+    ? error
+    : isAddMovieKind
+      ? addMovieNetworkError
+      : addRatingNetworkError;
+  const displayResult = isGetKind ? result : isAddMovieKind ? addMovieResult : addRatingResult;
 
   function handleMovieIdSubmit(parsedId: number) {
     setMovieIdError(null);
@@ -133,14 +193,14 @@ function App() {
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (queryType === "by-id") {
+    if (requestKind === "by-id") {
       const parsed = Number(movieIdInput);
       if (!Number.isInteger(parsed) || parsed < 1) {
         setMovieIdError("ID filma mora biti pozitivan cijeli broj.");
         return;
       }
       handleMovieIdSubmit(parsed);
-    } else {
+    } else if (requestKind === "top-rated") {
       const parsedLimit = Number(limitInput);
       const parsedMinRatings = Number(minRatingsInput);
 
@@ -154,12 +214,14 @@ function App() {
       }
       handleTopRatedSubmit(parsedLimit, parsedMinRatings);
     }
+    // add-movie / add-rating nemaju formu ovdje - submit ide kroz zaseban
+    // modal (handleAddMovieSubmit / handleAddRatingSubmit ispod).
   }
 
-  function handleQueryTypeChange(next: QueryType) {
+  function handleRequestKindChange(next: RequestKind) {
     setMovieIdError(null);
     setTopRatedError(null);
-    setQueryType(next);
+    setRequestKind(next);
   }
 
   function openAddMovieModal() {
@@ -213,6 +275,57 @@ function App() {
     });
   }
 
+  function openAddRatingModal() {
+    setAddRatingFormError(null);
+    resetAddRating();
+    setIsAddRatingModalOpen(true);
+  }
+
+  function closeAddRatingModal() {
+    setIsAddRatingModalOpen(false);
+  }
+
+  function handleAddAnotherRating() {
+    setAddRatingFormError(null);
+    resetAddRating();
+    // Predloži sljedećeg korisnika (trenutni userId + 1), zadrži isti film
+    // i vrati ocjenu na podrazumijevanu - isti duh kao handleAddAnotherMovie
+    // (brzo dodavanje sljedeće ocjene bez ručnog mijenjanja svih polja).
+    setAddRatingUserIdInput((prev) => String((Number(prev) || 0) + 1));
+    setAddRatingValue(DEFAULT_RATING_VALUE);
+  }
+
+  function handleAddRatingSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAddRatingFormError(null);
+
+    const parsedUserId = Number(addRatingUserIdInput);
+    if (!Number.isInteger(parsedUserId) || parsedUserId < 1) {
+      setAddRatingFormError("ID korisnika mora biti pozitivan cijeli broj.");
+      return;
+    }
+
+    const parsedMovieId = Number(addRatingMovieIdInput);
+    if (!Number.isInteger(parsedMovieId) || parsedMovieId < 1) {
+      setAddRatingFormError("ID filma mora biti pozitivan cijeli broj.");
+      return;
+    }
+
+    if (!Number.isFinite(addRatingValue) || addRatingValue < 0.5 || addRatingValue > 5) {
+      setAddRatingFormError("Ocjena mora biti broj u opsegu 0.5 - 5.");
+      return;
+    }
+
+    // BE ovdje NE prima "optimized" u body-ju (samo u query stringu kao i
+    // ostali upiti) - vidi movie.controller.js -> addRating: čita
+    // isključivo userId/movieId/rating iz req.body.
+    void addRating(addRatingPath, {
+      userId: parsedUserId,
+      movieId: parsedMovieId,
+      rating: addRatingValue,
+    });
+  }
+
   return (
     <div className="min-h-screen w-full flex bg-base-100 text-base-content">
       <Sidebar
@@ -220,18 +333,18 @@ function App() {
         onDbEngineChange={setDbEngine}
         dbMode={dbMode}
         onDbModeChange={setDbMode}
-        disabled={loading || addMovieLoading}
+        disabled={loading || addMovieLoading || addRatingLoading}
       />
       <ResponsePanel
-        queryType={queryType}
-        onQueryTypeChange={handleQueryTypeChange}
-        method="GET"
-        url={`/api${path}`}
-        loading={loading}
-        networkError={error}
-        status={result?.status ?? null}
-        ok={result?.ok ?? null}
-        body={result?.body}
+        requestKind={requestKind}
+        onRequestKindChange={handleRequestKindChange}
+        method={displayMethod}
+        url={displayUrl}
+        loading={displayLoading}
+        networkError={displayNetworkError}
+        status={displayResult?.status ?? null}
+        ok={displayResult?.ok ?? null}
+        body={displayResult?.body}
         movieIdInput={movieIdInput}
         onMovieIdInputChange={setMovieIdInput}
         movieIdError={movieIdError}
@@ -242,6 +355,7 @@ function App() {
         topRatedError={topRatedError}
         onSubmit={handleSubmit}
         onOpenAddMovieModal={openAddMovieModal}
+        onOpenAddRatingModal={openAddRatingModal}
       />
 
       <AddMovieModal
@@ -261,6 +375,25 @@ function App() {
         status={addMovieResult?.status ?? null}
         ok={addMovieResult?.ok ?? null}
         body={addMovieResult?.body}
+      />
+
+      <AddRatingModal
+        open={isAddRatingModalOpen}
+        onClose={closeAddRatingModal}
+        userIdInput={addRatingUserIdInput}
+        onUserIdInputChange={setAddRatingUserIdInput}
+        movieIdInput={addRatingMovieIdInput}
+        onMovieIdInputChange={setAddRatingMovieIdInput}
+        rating={addRatingValue}
+        onRatingChange={setAddRatingValue}
+        formError={addRatingFormError}
+        onSubmit={handleAddRatingSubmit}
+        onAddAnother={handleAddAnotherRating}
+        loading={addRatingLoading}
+        networkError={addRatingNetworkError}
+        status={addRatingResult?.status ?? null}
+        ok={addRatingResult?.ok ?? null}
+        body={addRatingResult?.body}
       />
     </div>
   );

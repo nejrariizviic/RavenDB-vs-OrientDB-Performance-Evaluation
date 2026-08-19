@@ -1,13 +1,14 @@
 import type { FormEvent } from "react";
 import { isMovieQuerySuccess, MovieQueryResult } from "./MovieQueryResult";
 import { isTopRatedQuerySuccess, TopRatedResult } from "./TopRatedResult";
-import { QueryTypeTabs } from "./QueryTypeTabs";
-import { PlusIcon } from "./icons";
-import type { QueryType } from "../lib/queryType";
+import { isRatingMutationSuccess, RatingQueryResult } from "./RatingQueryResult";
+import { RequestTypeSelector } from "./RequestTypeSelector";
+import { PlusIcon, StarIcon } from "./icons";
+import type { RequestKind } from "../lib/requestKind";
 
 interface ResponsePanelProps {
-  queryType: QueryType;
-  onQueryTypeChange: (value: QueryType) => void;
+  requestKind: RequestKind;
+  onRequestKindChange: (value: RequestKind) => void;
 
   method: string;
   url: string;
@@ -30,14 +31,13 @@ interface ResponsePanelProps {
   onMinRatingsInputChange: (value: string) => void;
   topRatedError: string | null;
 
-  /** Zajednički submit handler - App.tsx zna koju formu (i validaciju) da primijeni na osnovu trenutnog queryType-a. */
+  /** Zajednički submit handler za GET forme (by-id/top-rated) - App.tsx zna koju formu (i validaciju) da primijeni na osnovu trenutnog requestKind-a. */
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 
-  /**
-   * Otvara popup za JEDNOSTAVAN POST (dodaj novi film) - dugme se prikazuje
-   * SAMO na "by-id" kartici (vidi AddMovieModal.tsx za samu formu/logiku).
-   */
+  /** Otvara popup za JEDNOSTAVAN POST (dodaj novi film) - vidi AddMovieModal.tsx. */
   onOpenAddMovieModal: () => void;
+  /** Otvara popup za SLOŽEN POST (dodaj ocjenu) - vidi AddRatingModal.tsx. */
+  onOpenAddRatingModal: () => void;
 }
 
 function formatBody(body: unknown): string {
@@ -48,8 +48,8 @@ function formatBody(body: unknown): string {
 }
 
 export function ResponsePanel({
-  queryType,
-  onQueryTypeChange,
+  requestKind,
+  onRequestKindChange,
   method,
   url,
   loading,
@@ -67,53 +67,55 @@ export function ResponsePanel({
   onMinRatingsInputChange,
   topRatedError,
   onOpenAddMovieModal,
+  onOpenAddRatingModal,
 }: ResponsePanelProps) {
+  // Za POST tipove (add-movie/add-rating) nema forme u ovom panelu (samo
+  // dugme koje otvara popup) - "prazno stanje" (još nema poslatog zahtjeva)
+  // se prikazuje umjesto sirovog "nema JSON tijela" placeholder-a.
+  const isMutationKind = requestKind === "add-movie" || requestKind === "add-rating";
+  const showEmptyMutationState = isMutationKind && status === null && !networkError && !loading;
+
   return (
     <main className="flex-1 p-8 overflow-auto">
-      <QueryTypeTabs value={queryType} onChange={onQueryTypeChange} disabled={loading} />
+      <RequestTypeSelector value={requestKind} onChange={onRequestKindChange} disabled={loading} />
 
       <div className="flex flex-wrap items-center justify-between gap-4 mb-2">
         <div className="flex items-center gap-3 font-mono text-sm">
-          <span className="badge badge-primary badge-outline">{method}</span>
+          <span
+            className={`badge badge-outline ${method === "GET" ? "badge-primary" : "badge-secondary"}`}
+          >
+            {method}
+          </span>
           <span className="text-base-content/80 break-all">{url}</span>
         </div>
 
-        {queryType === "by-id" ? (
-          <div className="flex items-center gap-2 flex-wrap">
-            <form onSubmit={onSubmit} className="flex items-center gap-2">
-              <label htmlFor="movie-id-input" className="text-sm text-base-content/60 whitespace-nowrap">
-                ID filma
-              </label>
-              <input
-                id="movie-id-input"
-                type="number"
-                min={1}
-                step={1}
-                className="input input-sm input-bordered w-24"
-                value={movieIdInput}
-                onChange={(event) => onMovieIdInputChange(event.target.value)}
-              />
-              <button type="submit" className="btn btn-sm btn-primary" disabled={loading}>
-                {loading && <span className="loading loading-spinner loading-xs" />}
-                Pošalji zahtjev
-              </button>
-            </form>
-
-            {/* Zaseban od forme za pretragu iznad - "dodaj novi film" je druga,
-                nezavisna akcija (POST, ne GET), pa otvara popup umjesto da
-                dijeli formu sa pretragom po ID-u. */}
-            <button
-              type="button"
-              className="btn btn-sm btn-outline btn-secondary gap-1.5"
-              onClick={onOpenAddMovieModal}
-            >
-              <PlusIcon className="h-4 w-4" />
-              Dodaj novi film
+        {requestKind === "by-id" && (
+          <form onSubmit={onSubmit} className="flex items-center gap-2">
+            <label htmlFor="movie-id-input" className="text-sm text-base-content/60 whitespace-nowrap">
+              ID filma
+            </label>
+            <input
+              id="movie-id-input"
+              type="number"
+              min={1}
+              step={1}
+              className="input input-sm input-bordered w-24"
+              value={movieIdInput}
+              onChange={(event) => onMovieIdInputChange(event.target.value)}
+            />
+            <button type="submit" className="btn btn-sm btn-primary" disabled={loading}>
+              {loading && <span className="loading loading-spinner loading-xs" />}
+              Pošalji zahtjev
             </button>
-          </div>
-        ) : (
+          </form>
+        )}
+
+        {requestKind === "top-rated" && (
           <form onSubmit={onSubmit} className="flex items-center gap-2 flex-wrap">
-            <label htmlFor="top-rated-limit-input" className="text-sm text-base-content/60 whitespace-nowrap">
+            <label
+              htmlFor="top-rated-limit-input"
+              className="text-sm text-base-content/60 whitespace-nowrap"
+            >
               Top N
             </label>
             <input
@@ -126,7 +128,10 @@ export function ResponsePanel({
               value={limitInput}
               onChange={(event) => onLimitInputChange(event.target.value)}
             />
-            <label htmlFor="top-rated-min-ratings-input" className="text-sm text-base-content/60 whitespace-nowrap">
+            <label
+              htmlFor="top-rated-min-ratings-input"
+              className="text-sm text-base-content/60 whitespace-nowrap"
+            >
               Min. ocjena
             </label>
             <input
@@ -144,19 +149,39 @@ export function ResponsePanel({
             </button>
           </form>
         )}
+
+        {requestKind === "add-movie" && (
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary gap-1.5"
+            onClick={onOpenAddMovieModal}
+          >
+            <PlusIcon className="h-4 w-4" />
+            Otvori formu za dodavanje filma
+          </button>
+        )}
+
+        {requestKind === "add-rating" && (
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary gap-1.5"
+            onClick={onOpenAddRatingModal}
+          >
+            <StarIcon className="h-4 w-4" />
+            Otvori formu za dodavanje ocjene
+          </button>
+        )}
       </div>
 
-      {queryType === "by-id" && movieIdError && (
+      {requestKind === "by-id" && movieIdError && (
         <p className="text-error text-xs mb-4">{movieIdError}</p>
       )}
-      {queryType === "top-rated" && topRatedError && (
+      {requestKind === "top-rated" && topRatedError && (
         <p className="text-error text-xs mb-4">{topRatedError}</p>
       )}
 
       {status !== null && (
-        <div className={`badge mb-4 ${ok ? "badge-success" : "badge-error"}`}>
-          HTTP {status}
-        </div>
+        <div className={`badge mb-4 ${ok ? "badge-success" : "badge-error"}`}>HTTP {status}</div>
       )}
 
       {networkError && (
@@ -173,6 +198,21 @@ export function ResponsePanel({
         <MovieQueryResult body={body} />
       ) : isTopRatedQuerySuccess(body) ? (
         <TopRatedResult body={body} />
+      ) : isRatingMutationSuccess(body) ? (
+        <RatingQueryResult body={body} />
+      ) : showEmptyMutationState ? (
+        <div className="rounded-box border border-dashed border-base-300 p-10 flex flex-col items-center gap-3 text-center text-base-content/60">
+          {requestKind === "add-movie" ? (
+            <PlusIcon className="h-8 w-8 opacity-40" />
+          ) : (
+            <StarIcon className="h-8 w-8 opacity-40" />
+          )}
+          <p className="text-sm max-w-sm">
+            {requestKind === "add-movie"
+              ? "Još nema poslatog zahtjeva. Klikni na dugme iznad da dodaš novi film."
+              : "Još nema poslatog zahtjeva. Klikni na dugme iznad da dodaš novu ocjenu - korisnik i film moraju već postojati."}
+          </p>
+        </div>
       ) : (
         <pre className="rounded-box bg-neutral text-neutral-content text-sm p-4 overflow-auto">
           <code>{formatBody(body)}</code>

@@ -206,10 +206,17 @@ async function ravenAddRating(data) {
       return { status: "not_found" };
     }
 
+    // VAŽNO: .firstOrNull() umjesto .first() - RavenDB Node.js klijent kod
+    // .first() BACA InvalidOperationException ("Expected at least one
+    // result.") ako upit ne vrati nijedan rezultat, umjesto da vrati null
+    // (isti razlog kao kod ravenDeleteTag niže u ovom fajlu). Bez ovoga bi
+    // SVAKI pokušaj dodavanja ocjene padao sa 500 čim korisnik ili ocjena
+    // ne bi bili pronađeni - a to je upravo normalan slučaj koji ovaj upit
+    // treba da obradi kao "not_found"/nastavi dalje, a ne da puca.
     const existingUser = await session
       .query({ collection: "Users" })
       .whereEquals("userId", userId)
-      .first();
+      .firstOrNull();
     if (!existingUser) {
       return { status: "not_found" };
     }
@@ -218,7 +225,7 @@ async function ravenAddRating(data) {
       .query({ collection: "Ratings" })
       .whereEquals("movieId", movieId)
       .whereEquals("userId", userId)
-      .first();
+      .firstOrNull();
     if (existingRating) {
       return { status: "duplicate" };
     }
