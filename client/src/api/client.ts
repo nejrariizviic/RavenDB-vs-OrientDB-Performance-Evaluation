@@ -30,3 +30,31 @@ export async function apiGet<T = unknown>(path: string): Promise<ApiResult<T>> {
 
   return { status: res.status, ok: res.ok, body };
 }
+
+/**
+ * Šalje POST zahtjev ka BE-u sa JSON tijelom i vraća HTTP status kod
+ * zajedno sa parsiranim JSON odgovorom - ISTA semantika kao kod apiGet
+ * (vidi napomenu iznad): ne baca grešku na 4xx/5xx (npr. 409 kad film sa
+ * datim movieId već postoji), taj odgovor treba prikazati korisniku u
+ * cijelosti. Greška se baca SAMO ako zahtjev nije uspio da stigne do
+ * servera (server ugašen, pogrešan URL, CORS) - tu grešku hvata pozivalac.
+ */
+export async function apiPost<T = unknown>(
+  path: string,
+  payload: unknown
+): Promise<ApiResult<T>> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  let body: T;
+  try {
+    body = (await res.json()) as T;
+  } catch {
+    body = null as T;
+  }
+
+  return { status: res.status, ok: res.ok, body };
+}

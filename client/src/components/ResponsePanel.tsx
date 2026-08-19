@@ -2,6 +2,7 @@ import type { FormEvent } from "react";
 import { isMovieQuerySuccess, MovieQueryResult } from "./MovieQueryResult";
 import { isTopRatedQuerySuccess, TopRatedResult } from "./TopRatedResult";
 import { QueryTypeTabs } from "./QueryTypeTabs";
+import { PlusIcon } from "./icons";
 import type { QueryType } from "../lib/queryType";
 
 interface ResponsePanelProps {
@@ -31,6 +32,12 @@ interface ResponsePanelProps {
 
   /** Zajednički submit handler - App.tsx zna koju formu (i validaciju) da primijeni na osnovu trenutnog queryType-a. */
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+
+  /**
+   * Otvara popup za JEDNOSTAVAN POST (dodaj novi film) - dugme se prikazuje
+   * SAMO na "by-id" kartici (vidi AddMovieModal.tsx za samu formu/logiku).
+   */
+  onOpenAddMovieModal: () => void;
 }
 
 function formatBody(body: unknown): string {
@@ -59,6 +66,7 @@ export function ResponsePanel({
   minRatingsInput,
   onMinRatingsInputChange,
   topRatedError,
+  onOpenAddMovieModal,
 }: ResponsePanelProps) {
   return (
     <main className="flex-1 p-8 overflow-auto">
@@ -71,24 +79,38 @@ export function ResponsePanel({
         </div>
 
         {queryType === "by-id" ? (
-          <form onSubmit={onSubmit} className="flex items-center gap-2">
-            <label htmlFor="movie-id-input" className="text-sm text-base-content/60 whitespace-nowrap">
-              ID filma
-            </label>
-            <input
-              id="movie-id-input"
-              type="number"
-              min={1}
-              step={1}
-              className="input input-sm input-bordered w-24"
-              value={movieIdInput}
-              onChange={(event) => onMovieIdInputChange(event.target.value)}
-            />
-            <button type="submit" className="btn btn-sm btn-primary" disabled={loading}>
-              {loading && <span className="loading loading-spinner loading-xs" />}
-              Pošalji zahtjev
+          <div className="flex items-center gap-2 flex-wrap">
+            <form onSubmit={onSubmit} className="flex items-center gap-2">
+              <label htmlFor="movie-id-input" className="text-sm text-base-content/60 whitespace-nowrap">
+                ID filma
+              </label>
+              <input
+                id="movie-id-input"
+                type="number"
+                min={1}
+                step={1}
+                className="input input-sm input-bordered w-24"
+                value={movieIdInput}
+                onChange={(event) => onMovieIdInputChange(event.target.value)}
+              />
+              <button type="submit" className="btn btn-sm btn-primary" disabled={loading}>
+                {loading && <span className="loading loading-spinner loading-xs" />}
+                Pošalji zahtjev
+              </button>
+            </form>
+
+            {/* Zaseban od forme za pretragu iznad - "dodaj novi film" je druga,
+                nezavisna akcija (POST, ne GET), pa otvara popup umjesto da
+                dijeli formu sa pretragom po ID-u. */}
+            <button
+              type="button"
+              className="btn btn-sm btn-outline btn-secondary gap-1.5"
+              onClick={onOpenAddMovieModal}
+            >
+              <PlusIcon className="h-4 w-4" />
+              Dodaj novi film
             </button>
-          </form>
+          </div>
         ) : (
           <form onSubmit={onSubmit} className="flex items-center gap-2 flex-wrap">
             <label htmlFor="top-rated-limit-input" className="text-sm text-base-content/60 whitespace-nowrap">
