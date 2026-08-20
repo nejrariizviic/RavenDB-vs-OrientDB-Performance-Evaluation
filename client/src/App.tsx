@@ -4,6 +4,7 @@ import { ResponsePanel } from "./components/ResponsePanel";
 import { AddMovieModal } from "./components/AddMovieModal";
 import { AddRatingModal } from "./components/AddRatingModal";
 import { EditMovieModal } from "./components/EditMovieModal";
+import { CorrectRatingsModal } from "./components/CorrectRatingsModal";
 import { useApi } from "./hooks/useApi";
 import { useApiMutation } from "./hooks/useApiMutation";
 import { useLocalStorageState } from "./hooks/useLocalStorageState";
@@ -51,6 +52,18 @@ const DEFAULT_RATING_VALUE = 4;
 // podrazumijevani ID izmišljen.
 const DEFAULT_EDIT_MOVIE_ID = "1";
 
+// Podrazumijevane vrijednosti za formu "korekcija ocjena aktivnih korisnika"
+// (SLOŽEN PUT, u popup modalu) - vidi movie.controller.js ->
+// correctActiveUsersRatings: isti podrazumijevani prag (minRatings=100) kao
+// na BE-u kad polje izostane. DEFAULT_CORRECTION_MAX_ACTIVE_USERS je
+// NAMJERNO postavljen na malu vrijednost (umjesto praznog/bez ograničenja) -
+// to je "dev test" polje predviđeno baš za ovo: bezbjedno prvo isprobavanje
+// na malom uzorku korisnika prije punog pokretanja nad svim aktivnim
+// korisnicima (vidi CorrectRatingsModal.tsx).
+const DEFAULT_CORRECTION_DELTA = "0.5";
+const DEFAULT_CORRECTION_MIN_RATINGS = "100";
+const DEFAULT_CORRECTION_MAX_ACTIVE_USERS = "5";
+
 function App() {
   const [dbEngine, setDbEngine] = useLocalStorageState<DbEngine>(
     DB_ENGINE_STORAGE_KEY,
@@ -61,11 +74,11 @@ function App() {
     DEFAULT_DB_MODE
   );
 
-  // Prekidač između sva ČETIRI demonstrirana zahtjeva (2x GET, 2x POST) -
-  // vidi lib/requestKind.ts. NIJE u localStorage-u (isti razlog kao ranije
-  // "queryType" prekidač koji je ovo zamijenio - samo je sad proširen sa 2
-  // na 4 vrijednosti, jer su "dodaj film" i novi "dodaj ocjenu" sad
-  // punopravne stavke u istom vizuelnom biraču, a ne skriveni popup).
+  // Prekidač između svih ŠEST demonstriranih zahtjeva (2x GET, 2x POST, 2x
+  // PUT) - vidi lib/requestKind.ts. NIJE u localStorage-u (isti razlog kao
+  // ranije "queryType" prekidač koji je ovo zamijenio - samo je sad proširen
+  // sa 2 na 6 vrijednosti, jer su sve mutacije sad punopravne stavke u istom
+  // vizuelnom biraču, a ne skriveni popup).
   const [requestKind, setRequestKind] = useState<RequestKind>(DEFAULT_REQUEST_KIND);
 
   // ---- JEDNOSTAVAN GET: film po ID-u ----
@@ -143,6 +156,38 @@ function App() {
     reset: resetEditMovie,
   } = useApiMutation();
 
+  // ---- SLOŽEN PUT: korekcija ocjena "aktivnih" korisnika (popup modal,
+  // vidi CorrectRatingsModal.tsx) ----
+  // Isti pattern kao "izmijeni naslov filma" iznad (nema Input/potvrđena
+  // razdvojenost - eksplicitan submit forme u modalu, generički
+  // useApiMutation hook sa "PUT"), sa jednom razlikom: odgovor sa BE-a ne
+  // nosi delta/minRatings nazad (samo agregatne brojeve, vidi
+  // movie.controller.js -> correctActiveUsersRatings), pa se POSLJEDNJE
+  // POSLATE vrijednosti pamte posebno (lastAppliedCorrectionDelta/
+  // MinRatings) da bi CorrectRatingsResult.tsx imao šta prikazati uz njih.
+  const [isCorrectRatingsModalOpen, setIsCorrectRatingsModalOpen] = useState(false);
+  const [correctionDeltaInput, setCorrectionDeltaInput] = useState(DEFAULT_CORRECTION_DELTA);
+  const [correctionMinRatingsInput, setCorrectionMinRatingsInput] = useState(
+    DEFAULT_CORRECTION_MIN_RATINGS
+  );
+  const [correctionMaxActiveUsersInput, setCorrectionMaxActiveUsersInput] = useState(
+    DEFAULT_CORRECTION_MAX_ACTIVE_USERS
+  );
+  const [correctionFormError, setCorrectionFormError] = useState<string | null>(null);
+  const [lastAppliedCorrectionDelta, setLastAppliedCorrectionDelta] = useState(
+    Number(DEFAULT_CORRECTION_DELTA)
+  );
+  const [lastAppliedCorrectionMinRatings, setLastAppliedCorrectionMinRatings] = useState(
+    Number(DEFAULT_CORRECTION_MIN_RATINGS)
+  );
+  const {
+    result: correctRatingsResult,
+    error: correctRatingsNetworkError,
+    loading: correctRatingsLoading,
+    mutate: correctRatings,
+    reset: resetCorrectRatings,
+  } = useApiMutation();
+
   // NAPOMENA: "optimized" query parametar se šalje uz svaki zahtjev (GET,
   // POST i PUT), ali ga BE trenutno NE čita/koristi (env.config.js ima samo
   // JEDNU konfiguraciju po bazi, bez razlike optimizovano/neoptimizovano) -
@@ -176,6 +221,12 @@ function App() {
   // isti duh kao kod addMoviePath/addRatingPath - eksplicitan submit).
   const editMoviePath = `/movies/${dbEngine}/${editMovieIdInput.trim() || "-"}?${optimizedParam}`;
 
+  // Path za PUT "korekcija ocjena aktivnih korisnika" (SLOŽEN PUT) - vidi
+  // movie.routes.js: PUT /api/movies/:dbEngine/ratings/correction. Isti duh
+  // kao addMoviePath/addRatingPath (svi parametri idu kroz body, path je
+  // stabilan) - za razliku od editMoviePath, ovdje NEMA ID-a u putanji.
+  const correctRatingsPath = `/movies/${dbEngine}/ratings/correction?${optimizedParam}`;
+
   // ---- Objedinjeno "šta se prikazuje u glavnom panelu" - zavisi od
   // trenutno odabranog requestKind-a. GET upiti (by-id/top-rated) koriste
   // rezultat useApi hook-a iznad, dok mutacije (add-movie/add-rating/
@@ -185,8 +236,9 @@ function App() {
   const isGetKind = requestKind === "by-id" || requestKind === "top-rated";
   const isAddMovieKind = requestKind === "add-movie";
   const isAddRatingKind = requestKind === "add-rating";
-  // edit-title je implicitni "else" ogranak u ternary lancima ispod (nema
-  // sopstvene provjere jer je requestKind uvijek jedna od 5 poznatih
+  const isEditTitleKind = requestKind === "edit-title";
+  // correct-ratings je implicitni "else" ogranak u ternary lancima ispod
+  // (nema sopstvenu provjeru jer je requestKind uvijek jedna od 6 poznatih
   // vrijednosti - vidi lib/requestKind.ts).
 
   // HTTP metoda se čita direktno iz REQUEST_KINDS metapodataka (jedan izvor
@@ -199,28 +251,36 @@ function App() {
       ? `/api${addMoviePath}`
       : isAddRatingKind
         ? `/api${addRatingPath}`
-        : `/api${editMoviePath}`;
+        : isEditTitleKind
+          ? `/api${editMoviePath}`
+          : `/api${correctRatingsPath}`;
   const displayLoading = isGetKind
     ? loading
     : isAddMovieKind
       ? addMovieLoading
       : isAddRatingKind
         ? addRatingLoading
-        : editMovieLoading;
+        : isEditTitleKind
+          ? editMovieLoading
+          : correctRatingsLoading;
   const displayNetworkError = isGetKind
     ? error
     : isAddMovieKind
       ? addMovieNetworkError
       : isAddRatingKind
         ? addRatingNetworkError
-        : editMovieNetworkError;
+        : isEditTitleKind
+          ? editMovieNetworkError
+          : correctRatingsNetworkError;
   const displayResult = isGetKind
     ? result
     : isAddMovieKind
       ? addMovieResult
       : isAddRatingKind
         ? addRatingResult
-        : editMovieResult;
+        : isEditTitleKind
+          ? editMovieResult
+          : correctRatingsResult;
 
   function handleMovieIdSubmit(parsedId: number) {
     setMovieIdError(null);
@@ -432,6 +492,69 @@ function App() {
     void editMovieTitle(editMoviePath, { title: trimmedTitle }, "PUT");
   }
 
+  function openCorrectRatingsModal() {
+    // Svako otvaranje kreće "čisto" - prethodni rezultat (uspjeh/greška iz
+    // ranije sesije) se ne vuče u novi pokušaj.
+    setCorrectionFormError(null);
+    resetCorrectRatings();
+    setIsCorrectRatingsModalOpen(true);
+  }
+
+  function closeCorrectRatingsModal() {
+    setIsCorrectRatingsModalOpen(false);
+  }
+
+  function handleRunAnotherCorrection() {
+    setCorrectionFormError(null);
+    resetCorrectRatings();
+    // Za razliku od handleAddAnotherMovie/handleEditAnotherMovie (koji
+    // predlažu SLJEDEĆI ID), ovdje nema "sljedećeg" prirodnog unosa - forma
+    // samo ostaje popunjena istim vrijednostima, spremna za ponovno slanje
+    // (npr. novi krug korekcije nad istim pragom, ali drugom deltom).
+  }
+
+  function handleCorrectRatingsSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCorrectionFormError(null);
+
+    const parsedDelta = Number(correctionDeltaInput);
+    if (!Number.isFinite(parsedDelta) || parsedDelta === 0) {
+      setCorrectionFormError("Delta je obavezna i mora biti broj različit od 0 (npr. 0.5 ili -0.5).");
+      return;
+    }
+
+    const parsedMinRatings = Number(correctionMinRatingsInput);
+    if (!Number.isInteger(parsedMinRatings) || parsedMinRatings < 0) {
+      setCorrectionFormError("Prag 'aktivnog' korisnika mora biti nenegativan cijeli broj.");
+      return;
+    }
+
+    // Opciono polje - prazan unos znači "bez ograničenja" (šalje se na SVE
+    // aktivne korisnike), vidi napomenu uz DEFAULT_CORRECTION_MAX_ACTIVE_USERS.
+    const trimmedMaxActiveUsers = correctionMaxActiveUsersInput.trim();
+    let parsedMaxActiveUsers: number | undefined;
+    if (trimmedMaxActiveUsers.length > 0) {
+      parsedMaxActiveUsers = Number(trimmedMaxActiveUsers);
+      if (!Number.isInteger(parsedMaxActiveUsers) || parsedMaxActiveUsers < 1) {
+        setCorrectionFormError("Maks. broj korisnika (ako je unesen) mora biti pozitivan cijeli broj.");
+        return;
+      }
+    }
+
+    setLastAppliedCorrectionDelta(parsedDelta);
+    setLastAppliedCorrectionMinRatings(parsedMinRatings);
+
+    void correctRatings(
+      correctRatingsPath,
+      {
+        delta: parsedDelta,
+        minRatings: parsedMinRatings,
+        ...(parsedMaxActiveUsers !== undefined ? { maxActiveUsers: parsedMaxActiveUsers } : {}),
+      },
+      "PUT"
+    );
+  }
+
   return (
     <div className="min-h-screen w-full flex bg-base-100 text-base-content">
       <Sidebar
@@ -439,7 +562,13 @@ function App() {
         onDbEngineChange={setDbEngine}
         dbMode={dbMode}
         onDbModeChange={setDbMode}
-        disabled={loading || addMovieLoading || addRatingLoading || editMovieLoading}
+        disabled={
+          loading ||
+          addMovieLoading ||
+          addRatingLoading ||
+          editMovieLoading ||
+          correctRatingsLoading
+        }
       />
       <ResponsePanel
         requestKind={requestKind}
@@ -463,6 +592,9 @@ function App() {
         onOpenAddMovieModal={openAddMovieModal}
         onOpenAddRatingModal={openAddRatingModal}
         onOpenEditMovieModal={openEditMovieModal}
+        onOpenCorrectRatingsModal={openCorrectRatingsModal}
+        correctRatingsAppliedDelta={lastAppliedCorrectionDelta}
+        correctRatingsAppliedMinRatings={lastAppliedCorrectionMinRatings}
       />
 
       <AddMovieModal
@@ -519,6 +651,27 @@ function App() {
         ok={editMovieResult?.ok ?? null}
         body={editMovieResult?.body}
         lookupPath={editMoviePath}
+      />
+
+      <CorrectRatingsModal
+        open={isCorrectRatingsModalOpen}
+        onClose={closeCorrectRatingsModal}
+        deltaInput={correctionDeltaInput}
+        onDeltaInputChange={setCorrectionDeltaInput}
+        minRatingsInput={correctionMinRatingsInput}
+        onMinRatingsInputChange={setCorrectionMinRatingsInput}
+        maxActiveUsersInput={correctionMaxActiveUsersInput}
+        onMaxActiveUsersInputChange={setCorrectionMaxActiveUsersInput}
+        formError={correctionFormError}
+        onSubmit={handleCorrectRatingsSubmit}
+        onRunAnother={handleRunAnotherCorrection}
+        loading={correctRatingsLoading}
+        networkError={correctRatingsNetworkError}
+        status={correctRatingsResult?.status ?? null}
+        ok={correctRatingsResult?.ok ?? null}
+        body={correctRatingsResult?.body}
+        lastAppliedDelta={lastAppliedCorrectionDelta}
+        lastAppliedMinRatings={lastAppliedCorrectionMinRatings}
       />
     </div>
   );

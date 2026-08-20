@@ -1,25 +1,31 @@
 /**
- * Zajednički tip i metapodaci za SVIH PET demonstriranih zahtjeva ka BE-u -
+ * Zajednički tip i metapodaci za SVIH ŠEST demonstriranih zahtjeva ka BE-u -
  * koristi ih RequestTypeSelector.tsx (vizuelni birač u glavnom panelu) i
  * App.tsx (za odlučivanje koja forma / koji odgovor se prikazuje):
  *
- * - "by-id"      -> JEDNOSTAVAN GET:  pronađi film po ID-u
- * - "top-rated"  -> SLOŽEN GET:       Top N filmova po prosječnoj ocjeni
- * - "add-movie"  -> JEDNOSTAVAN POST: dodaj novi film
- * - "add-rating" -> SLOŽEN POST:      dodaj ocjenu SAMO ako korisnik i film već postoje
- * - "edit-title" -> JEDNOSTAVAN PUT:  izmijeni naslov postojećeg filma po movieId
+ * - "by-id"           -> JEDNOSTAVAN GET:  pronađi film po ID-u
+ * - "top-rated"       -> SLOŽEN GET:       Top N filmova po prosječnoj ocjeni
+ * - "add-movie"       -> JEDNOSTAVAN POST: dodaj novi film
+ * - "add-rating"      -> SLOŽEN POST:      dodaj ocjenu SAMO ako korisnik i film već postoje
+ * - "edit-title"      -> JEDNOSTAVAN PUT:  izmijeni naslov postojećeg filma po movieId
+ * - "correct-ratings" -> SLOŽEN PUT:       korekcija ocjena za "aktivne" korisnike (>N ocjena)
  *
  * Zamjenjuje raniji lib/queryType.ts (koji je pokrivao samo prva dva GET
  * upita) - "dodaj novi film" je ranije bio zaseban popup otvoren dugmetom sa
- * "by-id" kartice, a sad je i on (zajedno sa "dodaj ocjenu" i "izmijeni
- * naslov") punopravna stavka u istom vizuelnom biraču, umjesto običnih
- * tabova.
+ * "by-id" kartice, a sad je i on (zajedno sa preostalim mutacijama) punopravna
+ * stavka u istom vizuelnom biraču, umjesto običnih tabova.
  *
  * NAPOMENA: ovaj izbor se NAMJERNO ne pamti u localStorage-u (za razliku od
- * dbEngine/dbMode u lib/dbPreferences.ts) - to je samo prekidač između pet
+ * dbEngine/dbMode u lib/dbPreferences.ts) - to je samo prekidač između šest
  * demo prikaza unutar iste sesije, a ne korisnička preferenca vezana za bazu.
  */
-export type RequestKind = "by-id" | "top-rated" | "add-movie" | "add-rating" | "edit-title";
+export type RequestKind =
+  | "by-id"
+  | "top-rated"
+  | "add-movie"
+  | "add-rating"
+  | "edit-title"
+  | "correct-ratings";
 
 export const DEFAULT_REQUEST_KIND: RequestKind = "by-id";
 
@@ -70,5 +76,12 @@ export const REQUEST_KINDS: RequestKindMeta[] = [
     title: "Izmijeni naslov",
     description: "Ažurira naslov postojećeg filma po movieId - odbija nepostojeći film (404).",
     complexity: "simple",
+  },
+  {
+    kind: "correct-ratings",
+    method: "PUT",
+    title: "Korekcija ocjena",
+    description: "Masovno koriguje niske ocjene \"aktivnih\" korisnika (>N ocjena) za zadatu deltu.",
+    complexity: "complex",
   },
 ];

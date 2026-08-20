@@ -2,8 +2,9 @@ import type { FormEvent } from "react";
 import { isMovieQuerySuccess, MovieQueryResult } from "./MovieQueryResult";
 import { isTopRatedQuerySuccess, TopRatedResult } from "./TopRatedResult";
 import { isRatingMutationSuccess, RatingQueryResult } from "./RatingQueryResult";
+import { isCorrectRatingsSuccess, CorrectRatingsResult } from "./CorrectRatingsResult";
 import { RequestTypeSelector } from "./RequestTypeSelector";
-import { PencilIcon, PlusIcon, StarIcon } from "./icons";
+import { PencilIcon, PlusIcon, StarIcon, WrenchIcon } from "./icons";
 import type { RequestKind } from "../lib/requestKind";
 
 interface ResponsePanelProps {
@@ -40,6 +41,14 @@ interface ResponsePanelProps {
   onOpenAddRatingModal: () => void;
   /** Otvara popup za JEDNOSTAVAN PUT (izmijeni naslov filma) - vidi EditMovieModal.tsx. */
   onOpenEditMovieModal: () => void;
+  /** Otvara popup za SLOŽEN PUT (korekcija ocjena aktivnih korisnika) - vidi CorrectRatingsModal.tsx. */
+  onOpenCorrectRatingsModal: () => void;
+
+  // Potvrđene vrijednosti POSLJEDNJE poslate korekcije - odgovor sa BE-a ne
+  // nosi delta/minRatings nazad (vidi CorrectRatingsResult.tsx), pa se ovaj
+  // panel oslanja na App.tsx da ih proslijedi zajedno sa "body".
+  correctRatingsAppliedDelta: number;
+  correctRatingsAppliedMinRatings: number;
 }
 
 function formatBody(body: unknown): string {
@@ -71,12 +80,19 @@ export function ResponsePanel({
   onOpenAddMovieModal,
   onOpenAddRatingModal,
   onOpenEditMovieModal,
+  onOpenCorrectRatingsModal,
+  correctRatingsAppliedDelta,
+  correctRatingsAppliedMinRatings,
 }: ResponsePanelProps) {
-  // Za mutacije (add-movie/add-rating/edit-title) nema forme u ovom panelu
-  // (samo dugme koje otvara popup) - "prazno stanje" (još nema poslatog
-  // zahtjeva) se prikazuje umjesto sirovog "nema JSON tijela" placeholder-a.
+  // Za mutacije (add-movie/add-rating/edit-title/correct-ratings) nema forme
+  // u ovom panelu (samo dugme koje otvara popup) - "prazno stanje" (još nema
+  // poslatog zahtjeva) se prikazuje umjesto sirovog "nema JSON tijela"
+  // placeholder-a.
   const isMutationKind =
-    requestKind === "add-movie" || requestKind === "add-rating" || requestKind === "edit-title";
+    requestKind === "add-movie" ||
+    requestKind === "add-rating" ||
+    requestKind === "edit-title" ||
+    requestKind === "correct-ratings";
   const showEmptyMutationState = isMutationKind && status === null && !networkError && !loading;
 
   return (
@@ -186,6 +202,17 @@ export function ResponsePanel({
             Otvori formu za izmjenu naslova
           </button>
         )}
+
+        {requestKind === "correct-ratings" && (
+          <button
+            type="button"
+            className="btn btn-sm btn-warning gap-1.5"
+            onClick={onOpenCorrectRatingsModal}
+          >
+            <WrenchIcon className="h-4 w-4" />
+            Otvori formu za korekciju ocjena
+          </button>
+        )}
       </div>
 
       {requestKind === "by-id" && movieIdError && (
@@ -215,21 +242,31 @@ export function ResponsePanel({
         <TopRatedResult body={body} />
       ) : isRatingMutationSuccess(body) ? (
         <RatingQueryResult body={body} />
+      ) : isCorrectRatingsSuccess(body) ? (
+        <CorrectRatingsResult
+          body={body}
+          appliedDelta={correctRatingsAppliedDelta}
+          appliedMinRatings={correctRatingsAppliedMinRatings}
+        />
       ) : showEmptyMutationState ? (
         <div className="rounded-box border border-dashed border-base-300 p-10 flex flex-col items-center gap-3 text-center text-base-content/60">
           {requestKind === "add-movie" ? (
             <PlusIcon className="h-8 w-8 opacity-40" />
           ) : requestKind === "add-rating" ? (
             <StarIcon className="h-8 w-8 opacity-40" />
-          ) : (
+          ) : requestKind === "edit-title" ? (
             <PencilIcon className="h-8 w-8 opacity-40" />
+          ) : (
+            <WrenchIcon className="h-8 w-8 opacity-40" />
           )}
           <p className="text-sm max-w-sm">
             {requestKind === "add-movie"
               ? "Još nema poslatog zahtjeva. Klikni na dugme iznad da dodaš novi film."
               : requestKind === "add-rating"
                 ? "Još nema poslatog zahtjeva. Klikni na dugme iznad da dodaš novu ocjenu - korisnik i film moraju već postojati."
-                : "Još nema poslatog zahtjeva. Klikni na dugme iznad da izmijeniš naslov postojećeg filma."}
+                : requestKind === "edit-title"
+                  ? "Još nema poslatog zahtjeva. Klikni na dugme iznad da izmijeniš naslov postojećeg filma."
+                  : "Još nema poslatog zahtjeva. Klikni na dugme iznad da pokreneš korekciju ocjena aktivnih korisnika."}
           </p>
         </div>
       ) : (

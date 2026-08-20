@@ -103,6 +103,110 @@ export function PencilIcon({ className = "h-4 w-4" }: { className?: string }) {
 }
 
 /**
+ * Ikonica ključa (wrench) - koristi se za "Korekcija ocjena" (složen PUT) u
+ * RequestTypeSelector.tsx i CorrectRatingsModal.tsx - vizuelno jasno
+ * odvojena od PencilIcon (jednostavan PUT: izmjena JEDNOG polja) jer ova
+ * operacija masovno "popravlja" (koriguje) veći skup zapisa odjednom.
+ */
+export function WrenchIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M14.7 6.3a4 4 0 0 0-5.6 4.9L3 17.3V21h3.7l6.1-6.1a4 4 0 0 0 4.9-5.6l-2.6 2.6-2.8-.8-.8-2.8 2.6-2.6Z" />
+    </svg>
+  );
+}
+
+/** Ikonica strelice nagore u krugu - koristi se za pozitivnu korekciju (delta &gt; 0) u CorrectRatingsModal.tsx/CorrectRatingsResult.tsx. */
+export function TrendUpIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M3 17 9 11 13 15 21 7" />
+      <path d="M15 7h6v6" />
+    </svg>
+  );
+}
+
+/** Ikonica strelice nadole - koristi se za negativnu korekciju (delta &lt; 0) u CorrectRatingsModal.tsx/CorrectRatingsResult.tsx. */
+export function TrendDownIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M3 7 9 13 13 9 21 17" />
+      <path d="M15 17h6v-6" />
+    </svg>
+  );
+}
+
+/** Ikonica strelice udesno - koristi se u malom dijagramu toka korekcije (CorrectRatingsModal.tsx). */
+export function ArrowRightIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M5 12h14M13 6l6 6-6 6" />
+    </svg>
+  );
+}
+
+/** Ikonica grupe ljudi - koristi se za "aktivni korisnici" statistiku u CorrectRatingsResult.tsx. */
+export function UsersIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  );
+}
+
+/**
  * Puna (filled) zvjezdica - koristi se i kao ikonica za "Dodaj ocjenu" u
  * RequestTypeSelector.tsx, i kao gradivni blok za StarRating.tsx (birač i
  * prikaz ocjene sa djelimičnim popunjavanjem).

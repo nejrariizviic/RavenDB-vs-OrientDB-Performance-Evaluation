@@ -97,6 +97,11 @@ async function ravenGetTopRatedMovies(limit = 10, minRatings = 50) {
          select movieId, sum(rating) as ratingSum, count() as ratingCount`
       )
       .addParameter("minRatings", safeMinRatings)
+      // Isti razlog kao u ravenCorrectActiveUsersRatings (vidi opširniji
+      // komentar tamo) - "group by" RQL upit ide preko auto-indeksa koji se
+      // gradi asinhrono, pa bez ovoga upit povremeno može vratiti
+      // nepotpunu/staru listu filmova umjesto da sačeka tačan rezultat.
+      .waitForNonStaleResults()
       .all();
 
     if (!stats.length) {
@@ -283,8 +288,10 @@ async function ravenUpdateMovieTitle(movieId, title) {
  *      idiom kao u ravenGetTopRatedMovies (count() u where/select dijelu
  *      dinamičkog group by upita), samo ovdje se traže "aktivni" korisnici
  *      umjesto najbolje ocijenjenih filmova.
- *   2) Svi Ratings dokumenti tih korisnika (whereIn "userId") se učitavaju
- *      kao "tracked" entiteti u istoj sesiji; korekcija (+ delta) i clamp
+ *   2) Ratings dokumenti tih korisnika ČIJA JE TRENUTNA OCJENA < 3 (poslovno
+ *      pravilo iz zahtjeva - dižu se samo "niske" ocjene, whereIn "userId" +
+ *      whereLessThan "rating") se učitavaju kao "tracked" entiteti u istoj
+ *      sesiji; korekcija (+ delta) i clamp
  *      na opseg [0.5, 5.0] se rade u JS-u, a SVE promjene se šalju na
  *      server u JEDNOM saveChanges() pozivu (RavenDB Unit-of-Work batching
  *      - jedan HTTP zahtjev bez obzira na broj izmijenjenih dokumenata).
@@ -310,6 +317,25 @@ async function ravenCorrectActiveUsersRatings(delta, minRatingsThreshold = 100, 
          select userId, count() as ratingCount`
       )
       .addParameter("minRatingsThreshold", minRatingsThreshold)
+      // VAŽNO: RavenDB "group by" RQL upite izvršava preko AUTO-INDEKSA koji
+      // se grade ASINHRONO u pozadini. Bez eksplicitnog čekanja, PRVI put kad
+      // se ovaj TAČAN oblik upita izvrši (ili poslije veće navale pisanja),
+      // server zna vratiti NEPOTPUN/prazan rezultat dok indeks tek dostiže
+      // trenutno stanje kolekcije - izgleda kao "nema aktivnih korisnika"
+      // iako oni postoje (viđeno u praksi: isti zahtjev je prvi put vratio
+      // activeUsersCount=0, a par trenutaka kasnije, kad je indeks uhvatio
+      // korak, tačnih 10). .waitForNonStaleResults() garantuje TAČAN
+      // rezultat pri SVAKOM pozivu - cijena je da PRVI poziv (dok se indeks
+      // gradi) može potrajati duže, umjesto da vrati brz, ali pogrešan
+      // odgovor. Za benčmark alat čija je svrha TAČNO mjerenje, ispravnost
+      // ima prednost nad brzinom prvog (cold-start) poziva.
+      // Eksplicitan timeout od 30s (umjesto defaultnih 15s) - kod "hladnog
+      // starta" (npr. auto-indeks tek obrisan u Studio-u ili prvi put
+      // izgrađen) samo 15s ponekad nije dovoljno da se auto-indeks izgradi
+      // nad cijelom Ratings kolekcijom, pa je RavenDB Node.js klijent znao
+      // baciti nejasnu grešku ("Cannot read properties of null (reading
+      // 'toString')") umjesto čistog TimeoutException-a.
+      .waitForNonStaleResults(30000)
       .all();
 
     if (!activeUsers.length) {
@@ -329,6 +355,16 @@ async function ravenCorrectActiveUsersRatings(delta, minRatingsThreshold = 100, 
     const ratings = await session
       .query({ collection: "Ratings" })
       .whereIn("userId", activeUserIds)
+      .whereLessThan("rating", 3)
+      // ISTI razlog kao kod gornjeg group by upita: ovaj upit ide preko
+      // SVOG SOPSTVENOG auto-indeksa (po userId + rating), različitog od
+      // onog gore. Bez ovog čekanja, ako je taj auto-indeks tek u izgradnji
+      // (npr. odmah poslije gornjeg upita, dok je indexing subsystem još
+      // zauzet), upit zna vratiti nepotpun/prazan skup ocjena - izgledalo
+      // je kao "0 izmjena" iako aktivni korisnici sa niskim ocjenama
+      // stvarno postoje (vidjeno u praksi: FE je prikazivao 0, a Postman
+      // pozvan malo kasnije, kad je indeks stigao, tačan broj).
+      .waitForNonStaleResults(30000)
       .all();
 
     ratings.forEach((r) => {
@@ -427,6 +463,12 @@ async function ravenDeleteOrphanMovieRatings(limit = 10) {
   try {
     const taggedStats = await session.advanced
       .rawQuery(`from Tags group by movieId select movieId`)
+      // Isti razlog kao u ravenCorrectActiveUsersRatings (vidi opširniji
+      // komentar tamo). Ovdje je posljedica staleness-a posebno podmukla:
+      // lažno prazan rezultat bi značio da SVI filmovi (uključujući one koji
+      // stvarno imaju tagove) ispadnu "orphan", pa bi se mogle obrisati
+      // ocjene koje ne bi trebalo - .waitForNonStaleResults() to sprječava.
+      .waitForNonStaleResults()
       .all();
     const taggedMovieIds = taggedStats.map((s) => s.movieId);
 
@@ -706,7 +748,9 @@ async function orientUpdateMovieTitle(movieId, title) {
  *   1) HAVING-like agregacija kroz vanjski SELECT nad podupitom (isti idiom
  *      kao u orientGetTopRatedMovies), samo ovdje GROUP BY userId umjesto
  *      movieId, da bi se pronašli "aktivni" korisnici.
- *   2) JEDAN SET-based UPDATE nad Rating klasom (rating = rating + :delta)
+ *   2) JEDAN SET-based UPDATE nad Rating klasom (rating = rating + :delta), ali
+ *      SAMO za zapise čija je TRENUTNA ocjena < 3 (poslovno pravilo iz zahtjeva
+ *      - dižu se samo "niske" ocjene, ne diraju se sve ocjene aktivnog korisnika)
  *      za sve zapise čiji userId pripada listi aktivnih korisnika - bez
  *      učitavanja pojedinačnih zapisa u memoriju (za razliku od RavenDB
  *      grane, koja koristi Unit-of-Work/tracked-entity pristup preko
@@ -760,9 +804,12 @@ async function orientCorrectActiveUsersRatings(delta, minRatingsThreshold = 100,
     const activeUserIds = activeUsers.map((u) => u.userId);
 
     const updateResult = await session
-      .command("UPDATE Rating SET rating = rating + :delta WHERE userId IN :activeUserIds", {
-        params: { delta, activeUserIds },
-      })
+      .command(
+        "UPDATE Rating SET rating = rating + :delta WHERE userId IN :activeUserIds AND rating < 3",
+        {
+          params: { delta, activeUserIds },
+        }
+      )
       .all();
 
     // Clamp - dvije ciljane korekcije samo nad zapisima koji su nakon
