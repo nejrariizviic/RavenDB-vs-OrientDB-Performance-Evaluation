@@ -5,6 +5,7 @@ import { AddMovieModal } from "./components/AddMovieModal";
 import { AddRatingModal } from "./components/AddRatingModal";
 import { EditMovieModal } from "./components/EditMovieModal";
 import { CorrectRatingsModal } from "./components/CorrectRatingsModal";
+import { DeleteTagModal } from "./components/DeleteTagModal";
 import { useApi } from "./hooks/useApi";
 import { useApiMutation } from "./hooks/useApiMutation";
 import { useLocalStorageState } from "./hooks/useLocalStorageState";
@@ -64,6 +65,19 @@ const DEFAULT_CORRECTION_DELTA = "0.5";
 const DEFAULT_CORRECTION_MIN_RATINGS = "100";
 const DEFAULT_CORRECTION_MAX_ACTIVE_USERS = "5";
 
+// Podrazumijevane vrijednosti za formu "obriši tag" (JEDNOSTAVAN DELETE, u
+// popup modalu) - userId=2, movieId=60756, tag="funny" je poznata trojka iz
+// izvornog ml-latest-small tags.csv (isti dataset koji koriste i ostali
+// podrazumijevani ID-jevi u ovoj datoteci). NAPOMENA: za razliku od
+// DEFAULT_RATING_USER_ID/MOVIE_ID iznad, ovdje se NE MOŽE garantovati da je
+// baš ovaj tačan zapis i dalje prisutan u stvarno seed-ovanoj bazi (npr. ako
+// je već obrisan u ranijoj demonstraciji) - ako prvi submit padne na 404, to
+// je i dalje koristan prikaz ponašanja ovog upita (isti duh kao 409 kod
+// "dodaj ocjenu" iznad).
+const DEFAULT_DELETE_TAG_USER_ID = "2";
+const DEFAULT_DELETE_TAG_MOVIE_ID = "60756";
+const DEFAULT_DELETE_TAG_TAG = "funny";
+
 function App() {
   const [dbEngine, setDbEngine] = useLocalStorageState<DbEngine>(
     DB_ENGINE_STORAGE_KEY,
@@ -74,11 +88,11 @@ function App() {
     DEFAULT_DB_MODE
   );
 
-  // Prekidač između svih ŠEST demonstriranih zahtjeva (2x GET, 2x POST, 2x
-  // PUT) - vidi lib/requestKind.ts. NIJE u localStorage-u (isti razlog kao
-  // ranije "queryType" prekidač koji je ovo zamijenio - samo je sad proširen
-  // sa 2 na 6 vrijednosti, jer su sve mutacije sad punopravne stavke u istom
-  // vizuelnom biraču, a ne skriveni popup).
+  // Prekidač između svih SEDAM demonstriranih zahtjeva (2x GET, 2x POST, 2x
+  // PUT, 1x DELETE) - vidi lib/requestKind.ts. NIJE u localStorage-u (isti
+  // razlog kao ranije "queryType" prekidač koji je ovo zamijenio - samo je
+  // sad proširen sa 2 na 7 vrijednosti, jer su sve mutacije sad punopravne
+  // stavke u istom vizuelnom biraču, a ne skriveni popup).
   const [requestKind, setRequestKind] = useState<RequestKind>(DEFAULT_REQUEST_KIND);
 
   // ---- JEDNOSTAVAN GET: film po ID-u ----
@@ -188,11 +202,34 @@ function App() {
     reset: resetCorrectRatings,
   } = useApiMutation();
 
+  // ---- JEDNOSTAVAN DELETE: obriši jedan tag zapis po (userId, movieId, tag)
+  // (popup modal, vidi DeleteTagModal.tsx) ----
+  // Isti pattern kao "izmijeni naslov filma"/"dodaj ocjenu" iznad (nema
+  // Input/potvrđena razdvojenost - eksplicitan submit forme u modalu), ponovo
+  // koristi GENERIČKI useApiMutation hook (sad proširen da radi i DELETE, ne
+  // samo POST/PUT - vidi hooks/useApiMutation.ts) - jedina razlika je koja se
+  // HTTP metoda šalje. Za razliku od editMovieIdInput (gdje ID ide kroz
+  // PUTANJU), sva tri polja (userId, movieId, tag) ovdje idu kroz BODY - isti
+  // duh kao addRatingUserIdInput/addRatingMovieIdInput iznad.
+  const [isDeleteTagModalOpen, setIsDeleteTagModalOpen] = useState(false);
+  const [deleteTagUserIdInput, setDeleteTagUserIdInput] = useState(DEFAULT_DELETE_TAG_USER_ID);
+  const [deleteTagMovieIdInput, setDeleteTagMovieIdInput] = useState(DEFAULT_DELETE_TAG_MOVIE_ID);
+  const [deleteTagTagInput, setDeleteTagTagInput] = useState(DEFAULT_DELETE_TAG_TAG);
+  const [deleteTagFormError, setDeleteTagFormError] = useState<string | null>(null);
+  const {
+    result: deleteTagResult,
+    error: deleteTagNetworkError,
+    loading: deleteTagLoading,
+    mutate: deleteTag,
+    reset: resetDeleteTag,
+  } = useApiMutation();
+
   // NAPOMENA: "optimized" query parametar se šalje uz svaki zahtjev (GET,
-  // POST i PUT), ali ga BE trenutno NE čita/koristi (env.config.js ima samo
-  // JEDNU konfiguraciju po bazi, bez razlike optimizovano/neoptimizovano) -
-  // toggle je pripremljen na frontendu i spreman za kad se doda
-  // odgovarajuća podrška na BE (npr. druga baza/indeksi po engine-u).
+  // POST, PUT i DELETE), ali ga BE trenutno NE čita/koristi (env.config.js
+  // ima samo JEDNU konfiguraciju po bazi, bez razlike
+  // optimizovano/neoptimizovano) - toggle je pripremljen na frontendu i
+  // spreman za kad se doda odgovarajuća podrška na BE (npr. druga baza/
+  // indeksi po engine-u).
   const optimizedParam = `optimized=${dbMode === "optimized"}`;
 
   const path =
@@ -227,6 +264,12 @@ function App() {
   // stabilan) - za razliku od editMoviePath, ovdje NEMA ID-a u putanji.
   const correctRatingsPath = `/movies/${dbEngine}/ratings/correction?${optimizedParam}`;
 
+  // Path za DELETE "obriši tag" (JEDNOSTAVAN DELETE) - vidi movie.routes.js:
+  // DELETE /api/movies/:dbEngine/tags. Isti duh kao addMoviePath/
+  // addRatingPath/correctRatingsPath (sva tri identifikaciona polja idu kroz
+  // body, path je stabilan i ne zavisi od trenutnog unosa u formi).
+  const deleteTagPath = `/movies/${dbEngine}/tags?${optimizedParam}`;
+
   // ---- Objedinjeno "šta se prikazuje u glavnom panelu" - zavisi od
   // trenutno odabranog requestKind-a. GET upiti (by-id/top-rated) koriste
   // rezultat useApi hook-a iznad, dok mutacije (add-movie/add-rating/
@@ -237,8 +280,9 @@ function App() {
   const isAddMovieKind = requestKind === "add-movie";
   const isAddRatingKind = requestKind === "add-rating";
   const isEditTitleKind = requestKind === "edit-title";
-  // correct-ratings je implicitni "else" ogranak u ternary lancima ispod
-  // (nema sopstvenu provjeru jer je requestKind uvijek jedna od 6 poznatih
+  const isCorrectRatingsKind = requestKind === "correct-ratings";
+  // delete-tag je implicitni "else" ogranak u ternary lancima ispod (nema
+  // sopstvenu provjeru jer je requestKind uvijek jedna od 7 poznatih
   // vrijednosti - vidi lib/requestKind.ts).
 
   // HTTP metoda se čita direktno iz REQUEST_KINDS metapodataka (jedan izvor
@@ -253,7 +297,9 @@ function App() {
         ? `/api${addRatingPath}`
         : isEditTitleKind
           ? `/api${editMoviePath}`
-          : `/api${correctRatingsPath}`;
+          : isCorrectRatingsKind
+            ? `/api${correctRatingsPath}`
+            : `/api${deleteTagPath}`;
   const displayLoading = isGetKind
     ? loading
     : isAddMovieKind
@@ -262,7 +308,9 @@ function App() {
         ? addRatingLoading
         : isEditTitleKind
           ? editMovieLoading
-          : correctRatingsLoading;
+          : isCorrectRatingsKind
+            ? correctRatingsLoading
+            : deleteTagLoading;
   const displayNetworkError = isGetKind
     ? error
     : isAddMovieKind
@@ -271,7 +319,9 @@ function App() {
         ? addRatingNetworkError
         : isEditTitleKind
           ? editMovieNetworkError
-          : correctRatingsNetworkError;
+          : isCorrectRatingsKind
+            ? correctRatingsNetworkError
+            : deleteTagNetworkError;
   const displayResult = isGetKind
     ? result
     : isAddMovieKind
@@ -280,7 +330,9 @@ function App() {
         ? addRatingResult
         : isEditTitleKind
           ? editMovieResult
-          : correctRatingsResult;
+          : isCorrectRatingsKind
+            ? correctRatingsResult
+            : deleteTagResult;
 
   function handleMovieIdSubmit(parsedId: number) {
     setMovieIdError(null);
@@ -555,6 +607,56 @@ function App() {
     );
   }
 
+  function openDeleteTagModal() {
+    // Svako otvaranje kreće "čisto" - prethodni rezultat (uspjeh/greška iz
+    // ranije sesije) se ne vuče u novi pokušaj.
+    setDeleteTagFormError(null);
+    resetDeleteTag();
+    setIsDeleteTagModalOpen(true);
+  }
+
+  function closeDeleteTagModal() {
+    setIsDeleteTagModalOpen(false);
+  }
+
+  function handleDeleteAnotherTag() {
+    setDeleteTagFormError(null);
+    resetDeleteTag();
+    // Za razliku od handleAddAnotherMovie/handleAddAnotherRating (koji
+    // predlažu SLJEDEĆI ID), ovdje nema "sljedećeg" prirodnog unosa - polja
+    // ostaju popunjena istim vrijednostima, spremna za izmjenu prije
+    // narednog brisanja (isti duh kao handleRunAnotherCorrection).
+  }
+
+  function handleDeleteTagSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setDeleteTagFormError(null);
+
+    const parsedUserId = Number(deleteTagUserIdInput);
+    if (!Number.isInteger(parsedUserId) || parsedUserId < 1) {
+      setDeleteTagFormError("ID korisnika mora biti pozitivan cijeli broj.");
+      return;
+    }
+
+    const parsedMovieId = Number(deleteTagMovieIdInput);
+    if (!Number.isInteger(parsedMovieId) || parsedMovieId < 1) {
+      setDeleteTagFormError("ID filma mora biti pozitivan cijeli broj.");
+      return;
+    }
+
+    const trimmedTag = deleteTagTagInput.trim();
+    if (!trimmedTag) {
+      setDeleteTagFormError("Tag je obavezan.");
+      return;
+    }
+
+    void deleteTag(
+      deleteTagPath,
+      { userId: parsedUserId, movieId: parsedMovieId, tag: trimmedTag },
+      "DELETE"
+    );
+  }
+
   return (
     <div className="min-h-screen w-full flex bg-base-100 text-base-content">
       <Sidebar
@@ -567,7 +669,8 @@ function App() {
           addMovieLoading ||
           addRatingLoading ||
           editMovieLoading ||
-          correctRatingsLoading
+          correctRatingsLoading ||
+          deleteTagLoading
         }
       />
       <ResponsePanel
@@ -593,6 +696,7 @@ function App() {
         onOpenAddRatingModal={openAddRatingModal}
         onOpenEditMovieModal={openEditMovieModal}
         onOpenCorrectRatingsModal={openCorrectRatingsModal}
+        onOpenDeleteTagModal={openDeleteTagModal}
         correctRatingsAppliedDelta={lastAppliedCorrectionDelta}
         correctRatingsAppliedMinRatings={lastAppliedCorrectionMinRatings}
       />
@@ -672,6 +776,25 @@ function App() {
         body={correctRatingsResult?.body}
         lastAppliedDelta={lastAppliedCorrectionDelta}
         lastAppliedMinRatings={lastAppliedCorrectionMinRatings}
+      />
+
+      <DeleteTagModal
+        open={isDeleteTagModalOpen}
+        onClose={closeDeleteTagModal}
+        userIdInput={deleteTagUserIdInput}
+        onUserIdInputChange={setDeleteTagUserIdInput}
+        movieIdInput={deleteTagMovieIdInput}
+        onMovieIdInputChange={setDeleteTagMovieIdInput}
+        tagInput={deleteTagTagInput}
+        onTagInputChange={setDeleteTagTagInput}
+        formError={deleteTagFormError}
+        onSubmit={handleDeleteTagSubmit}
+        onDeleteAnother={handleDeleteAnotherTag}
+        loading={deleteTagLoading}
+        networkError={deleteTagNetworkError}
+        status={deleteTagResult?.status ?? null}
+        ok={deleteTagResult?.ok ?? null}
+        body={deleteTagResult?.body}
       />
     </div>
   );

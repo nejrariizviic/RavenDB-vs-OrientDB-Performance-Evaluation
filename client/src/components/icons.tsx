@@ -207,6 +207,56 @@ export function UsersIcon({ className = "h-4 w-4" }: { className?: string }) {
 }
 
 /**
+ * Ikonica kante za smeće - koristi se za "Obriši tag" (jednostavan DELETE) u
+ * RequestTypeSelector.tsx i DeleteTagModal.tsx - vizuelno jasno signalizira
+ * destruktivnu (nepovratnu) akciju, dosljedno crvenoj "error" boji kojom je
+ * DELETE metoda obojena kroz aplikaciju.
+ */
+export function TrashIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M4 7h16" />
+      <path d="M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7" />
+      <path d="M18.5 7 17.75 19a2 2 0 0 1-2 1.9H8.25a2 2 0 0 1-2-1.9L5.5 7" />
+      <path d="M10 11v6M14 11v6" />
+    </svg>
+  );
+}
+
+/**
+ * Ikonica cjenovne etikete (price tag) - koristi se u DeleteTagModal.tsx uz
+ * polje za unos samog tag stringa, da vizuelno asocira na "tag" pojam.
+ */
+export function TagIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M12.59 2.59a2 2 0 0 1 1.41-.59H20a2 2 0 0 1 2 2v5.99a2 2 0 0 1-.59 1.41l-9 9a2 2 0 0 1-2.82 0l-6.99-7a2 2 0 0 1 0-2.82Z" />
+      <circle cx="16.5" cy="7.5" r="1.25" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/**
  * Puna (filled) zvjezdica - koristi se i kao ikonica za "Dodaj ocjenu" u
  * RequestTypeSelector.tsx, i kao gradivni blok za StarRating.tsx (birač i
  * prikaz ocjene sa djelimičnim popunjavanjem).

@@ -1,5 +1,13 @@
 import type { ComponentType } from "react";
-import { FilmIcon, PencilIcon, SearchIcon, StarIcon, TrophyIcon, WrenchIcon } from "./icons";
+import {
+  FilmIcon,
+  PencilIcon,
+  SearchIcon,
+  StarIcon,
+  TrashIcon,
+  TrophyIcon,
+  WrenchIcon,
+} from "./icons";
 import { REQUEST_KINDS, type RequestKind } from "../lib/requestKind";
 
 interface RequestTypeSelectorProps {
@@ -15,13 +23,15 @@ const ICON_BY_KIND: Record<RequestKind, ComponentType<{ className?: string }>> =
   "add-rating": StarIcon,
   "edit-title": PencilIcon,
   "correct-ratings": WrenchIcon,
+  "delete-tag": TrashIcon,
 };
 
-/** Boja bedža po HTTP metodi - GET plavo, POST zeleno, PUT žuto/narandžasto (uobičajena REST konvencija). */
+/** Boja bedža po HTTP metodi - GET plavo, POST zeleno, PUT žuto/narandžasto, DELETE crveno (uobičajena REST konvencija). */
 const BADGE_CLASS_BY_METHOD: Record<(typeof REQUEST_KINDS)[number]["method"], string> = {
   GET: "badge-info",
   POST: "badge-success",
   PUT: "badge-warning",
+  DELETE: "badge-error",
 };
 
 /**
@@ -43,7 +53,7 @@ export function RequestTypeSelector({ value, onChange, disabled }: RequestTypeSe
     <div
       role="tablist"
       aria-label="Tip zahtjeva"
-      className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6"
+      className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3 mb-6"
     >
       {REQUEST_KINDS.map((meta) => {
         const Icon = ICON_BY_KIND[meta.kind];

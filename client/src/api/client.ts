@@ -86,3 +86,34 @@ export async function apiPut<T = unknown>(
 
   return { status: res.status, ok: res.ok, body };
 }
+
+/**
+ * Šalje DELETE zahtjev ka BE-u sa JSON tijelom - ISTA semantika kao
+ * apiPost/apiPut (vidi napomenu iznad), samo treća HTTP metoda. Koristi se
+ * za "obriši jedan tag zapis" (vidi movie.controller.js -> deleteTag):
+ * BE očekuje trojku (userId, movieId, tag) kroz JSON body (a ne kroz
+ * putanju, jer taj složeni ključ ima tri dijela - vidi movie.routes.js:
+ * DELETE /api/movies/:dbEngine/tags). Ne baca grešku na 4xx/5xx (npr. 404
+ * kad tag zapis sa datom trojkom ne postoji), taj odgovor treba prikazati
+ * korisniku u cijelosti. Greška se baca SAMO ako zahtjev nije uspio da
+ * stigne do servera.
+ */
+export async function apiDelete<T = unknown>(
+  path: string,
+  payload: unknown
+): Promise<ApiResult<T>> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  let body: T;
+  try {
+    body = (await res.json()) as T;
+  } catch {
+    body = null as T;
+  }
+
+  return { status: res.status, ok: res.ok, body };
+}

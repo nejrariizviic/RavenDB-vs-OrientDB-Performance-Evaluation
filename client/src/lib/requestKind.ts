@@ -1,14 +1,15 @@
 /**
- * Zajednički tip i metapodaci za SVIH ŠEST demonstriranih zahtjeva ka BE-u -
+ * Zajednički tip i metapodaci za SVIH SEDAM demonstriranih zahtjeva ka BE-u -
  * koristi ih RequestTypeSelector.tsx (vizuelni birač u glavnom panelu) i
  * App.tsx (za odlučivanje koja forma / koji odgovor se prikazuje):
  *
- * - "by-id"           -> JEDNOSTAVAN GET:  pronađi film po ID-u
- * - "top-rated"       -> SLOŽEN GET:       Top N filmova po prosječnoj ocjeni
- * - "add-movie"       -> JEDNOSTAVAN POST: dodaj novi film
- * - "add-rating"      -> SLOŽEN POST:      dodaj ocjenu SAMO ako korisnik i film već postoje
- * - "edit-title"      -> JEDNOSTAVAN PUT:  izmijeni naslov postojećeg filma po movieId
- * - "correct-ratings" -> SLOŽEN PUT:       korekcija ocjena za "aktivne" korisnike (>N ocjena)
+ * - "by-id"           -> JEDNOSTAVAN GET:    pronađi film po ID-u
+ * - "top-rated"       -> SLOŽEN GET:         Top N filmova po prosječnoj ocjeni
+ * - "add-movie"       -> JEDNOSTAVAN POST:   dodaj novi film
+ * - "add-rating"      -> SLOŽEN POST:        dodaj ocjenu SAMO ako korisnik i film već postoje
+ * - "edit-title"      -> JEDNOSTAVAN PUT:    izmijeni naslov postojećeg filma po movieId
+ * - "correct-ratings" -> SLOŽEN PUT:         korekcija ocjena za "aktivne" korisnike (>N ocjena)
+ * - "delete-tag"      -> JEDNOSTAVAN DELETE: obriši jedan tag zapis po (userId, movieId, tag)
  *
  * Zamjenjuje raniji lib/queryType.ts (koji je pokrivao samo prva dva GET
  * upita) - "dodaj novi film" je ranije bio zaseban popup otvoren dugmetom sa
@@ -16,7 +17,7 @@
  * stavka u istom vizuelnom biraču, umjesto običnih tabova.
  *
  * NAPOMENA: ovaj izbor se NAMJERNO ne pamti u localStorage-u (za razliku od
- * dbEngine/dbMode u lib/dbPreferences.ts) - to je samo prekidač između šest
+ * dbEngine/dbMode u lib/dbPreferences.ts) - to je samo prekidač između sedam
  * demo prikaza unutar iste sesije, a ne korisnička preferenca vezana za bazu.
  */
 export type RequestKind =
@@ -25,13 +26,14 @@ export type RequestKind =
   | "add-movie"
   | "add-rating"
   | "edit-title"
-  | "correct-ratings";
+  | "correct-ratings"
+  | "delete-tag";
 
 export const DEFAULT_REQUEST_KIND: RequestKind = "by-id";
 
 export interface RequestKindMeta {
   kind: RequestKind;
-  method: "GET" | "POST" | "PUT";
+  method: "GET" | "POST" | "PUT" | "DELETE";
   title: string;
   description: string;
   complexity: "simple" | "complex";
@@ -39,7 +41,10 @@ export interface RequestKindMeta {
 
 /**
  * Redoslijed ovdje određuje redoslijed kartica u RequestTypeSelector.tsx -
- * namjerno GET pa POST pa PUT, i unutar svake grupe jednostavan pa složen upit.
+ * namjerno GET pa POST pa PUT pa DELETE, i unutar svake grupe jednostavan pa
+ * složen upit (DELETE za sada ima samo jednostavnu varijantu - vidi
+ * movie.routes.js za "orphan cleanup", složen DELETE koji BE već podržava,
+ * ali koji još nije uveden u ovaj birač).
  */
 export const REQUEST_KINDS: RequestKindMeta[] = [
   {
@@ -83,5 +88,12 @@ export const REQUEST_KINDS: RequestKindMeta[] = [
     title: "Korekcija ocjena",
     description: "Masovno koriguje niske ocjene \"aktivnih\" korisnika (>N ocjena) za zadatu deltu.",
     complexity: "complex",
+  },
+  {
+    kind: "delete-tag",
+    method: "DELETE",
+    title: "Obriši tag",
+    description: "Briše TAČNO JEDAN tag zapis po (userId, movieId, tag) - odbija nepostojeći zapis (404).",
+    complexity: "simple",
   },
 ];

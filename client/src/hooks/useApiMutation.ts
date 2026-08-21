@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
-import { apiPost, apiPut, type ApiResult } from "../api/client";
+import { apiDelete, apiPost, apiPut, type ApiResult } from "../api/client";
 
-type MutationMethod = "POST" | "PUT";
+type MutationMethod = "POST" | "PUT" | "DELETE";
 
 interface UseApiMutationResult<T> {
   result: ApiResult<T> | null;
@@ -22,10 +22,11 @@ interface UseApiMutationResult<T> {
 }
 
 /**
- * Analogno useApi.ts, ali za POST/PUT (mutacije) - vidi JSDoc uz "mutate"
- * polje za ključnu razliku u odnosu na useApi (nema automatskog okidanja).
- * Isti hook opslužuje i "dodaj film"/"dodaj ocjenu" (POST) i "izmijeni
- * naslov filma" (PUT) - jedina razlika je koja se HTTP metoda proslijedi.
+ * Analogno useApi.ts, ali za POST/PUT/DELETE (mutacije) - vidi JSDoc uz
+ * "mutate" polje za ključnu razliku u odnosu na useApi (nema automatskog
+ * okidanja). Isti hook opslužuje "dodaj film"/"dodaj ocjenu" (POST),
+ * "izmijeni naslov filma" (PUT) i "obriši tag" (DELETE) - jedina razlika je
+ * koja se HTTP metoda proslijedi.
  */
 export function useApiMutation<T>(): UseApiMutationResult<T> {
   const [result, setResult] = useState<ApiResult<T> | null>(null);
@@ -37,7 +38,12 @@ export function useApiMutation<T>(): UseApiMutationResult<T> {
     setError(null);
 
     try {
-      const res = method === "PUT" ? await apiPut<T>(path, payload) : await apiPost<T>(path, payload);
+      const res =
+        method === "PUT"
+          ? await apiPut<T>(path, payload)
+          : method === "DELETE"
+            ? await apiDelete<T>(path, payload)
+            : await apiPost<T>(path, payload);
       setResult(res);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Zahtjev nije uspio.");
