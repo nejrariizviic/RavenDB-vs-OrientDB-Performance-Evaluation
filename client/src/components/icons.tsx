@@ -234,6 +234,37 @@ export function TrashIcon({ className = "h-4 w-4" }: { className?: string }) {
 }
 
 /**
+ * Ikonica metle - koristi se za "Orphan cleanup" (složen DELETE) u
+ * RequestTypeSelector.tsx i OrphanCleanupModal.tsx/OrphanCleanupResult.tsx -
+ * vizuelno jasno odvojena od TrashIcon (jednostavan DELETE: brisanje TAČNO
+ * JEDNOG poznatog zapisa) jer ova operacija masovno "pomete" (čisti) skup
+ * zapisa koji zadovoljavaju uslov (nemaju nijedan tag), a ne jedan konkretan
+ * resurs identifikovan po ključu - isti duh kao WrenchIcon za složen PUT.
+ */
+export function BroomIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M20 4 11 13" />
+      <path d="M11 13 4 20" />
+      <path d="M11 13 3.3 16.3" />
+      <path d="M4 20 3.3 16.3" />
+      <path d="M8.6 15.4 6.2 17.8M10.1 13.9 7.9 16.1" />
+      <path d="M15.5 3.5 17 5M18 2l1.5 1.5" />
+    </svg>
+  );
+}
+
+/**
  * Ikonica cjenovne etikete (price tag) - koristi se u DeleteTagModal.tsx uz
  * polje za unos samog tag stringa, da vizuelno asocira na "tag" pojam.
  */

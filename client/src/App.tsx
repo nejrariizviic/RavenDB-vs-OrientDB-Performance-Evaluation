@@ -6,6 +6,7 @@ import { AddRatingModal } from "./components/AddRatingModal";
 import { EditMovieModal } from "./components/EditMovieModal";
 import { CorrectRatingsModal } from "./components/CorrectRatingsModal";
 import { DeleteTagModal } from "./components/DeleteTagModal";
+import { OrphanCleanupModal } from "./components/OrphanCleanupModal";
 import { useApi } from "./hooks/useApi";
 import { useApiMutation } from "./hooks/useApiMutation";
 import { useLocalStorageState } from "./hooks/useLocalStorageState";
@@ -78,6 +79,12 @@ const DEFAULT_DELETE_TAG_USER_ID = "2";
 const DEFAULT_DELETE_TAG_MOVIE_ID = "60756";
 const DEFAULT_DELETE_TAG_TAG = "funny";
 
+// Podrazumijevana vrijednost za formu "orphan cleanup" (SLOŽEN DELETE, u
+// popup modalu) - vidi movie.controller.js -> deleteOrphanMovieRatings: isti
+// podrazumijevani I ujedno tvrdi maksimalni limit (10) po pozivu kao na BE-u
+// kad query parametar izostane (vidi OrphanCleanupModal.tsx).
+const DEFAULT_ORPHAN_CLEANUP_LIMIT = "10";
+
 function App() {
   const [dbEngine, setDbEngine] = useLocalStorageState<DbEngine>(
     DB_ENGINE_STORAGE_KEY,
@@ -88,10 +95,10 @@ function App() {
     DEFAULT_DB_MODE
   );
 
-  // Prekidač između svih SEDAM demonstriranih zahtjeva (2x GET, 2x POST, 2x
-  // PUT, 1x DELETE) - vidi lib/requestKind.ts. NIJE u localStorage-u (isti
+  // Prekidač između svih OSAM demonstriranih zahtjeva (2x GET, 2x POST, 2x
+  // PUT, 2x DELETE) - vidi lib/requestKind.ts. NIJE u localStorage-u (isti
   // razlog kao ranije "queryType" prekidač koji je ovo zamijenio - samo je
-  // sad proširen sa 2 na 7 vrijednosti, jer su sve mutacije sad punopravne
+  // sad proširen sa 2 na 8 vrijednosti, jer su sve mutacije sad punopravne
   // stavke u istom vizuelnom biraču, a ne skriveni popup).
   const [requestKind, setRequestKind] = useState<RequestKind>(DEFAULT_REQUEST_KIND);
 
@@ -224,6 +231,28 @@ function App() {
     reset: resetDeleteTag,
   } = useApiMutation();
 
+  // ---- SLOŽEN DELETE: "orphan cleanup" - obriši ocjene filmova bez ijednog
+  // taga (popup modal, vidi OrphanCleanupModal.tsx) ----
+  // Isti pattern kao "korekcija ocjena" iznad (nema Input/potvrđena
+  // razdvojenost - eksplicitan submit forme u modalu, MASOVNA operacija bez
+  // identifikacionih polja jednog resursa), ponovo koristi GENERIČKI
+  // useApiMutation hook sa "DELETE" (isti kao deleteTag). Za razliku od
+  // deleteTagUserIdInput/MovieIdInput/TagInput (koji idu kroz BODY), jedino
+  // polje ovdje ("limit") ide kroz QUERY STRING - isti duh kao
+  // editMovieIdInput (vidi orphanCleanupPath ispod).
+  const [isOrphanCleanupModalOpen, setIsOrphanCleanupModalOpen] = useState(false);
+  const [orphanCleanupLimitInput, setOrphanCleanupLimitInput] = useState(
+    DEFAULT_ORPHAN_CLEANUP_LIMIT
+  );
+  const [orphanCleanupFormError, setOrphanCleanupFormError] = useState<string | null>(null);
+  const {
+    result: orphanCleanupResult,
+    error: orphanCleanupNetworkError,
+    loading: orphanCleanupLoading,
+    mutate: deleteOrphanRatings,
+    reset: resetOrphanCleanup,
+  } = useApiMutation();
+
   // NAPOMENA: "optimized" query parametar se šalje uz svaki zahtjev (GET,
   // POST, PUT i DELETE), ali ga BE trenutno NE čita/koristi (env.config.js
   // ima samo JEDNU konfiguraciju po bazi, bez razlike
@@ -270,6 +299,20 @@ function App() {
   // body, path je stabilan i ne zavisi od trenutnog unosa u formi).
   const deleteTagPath = `/movies/${dbEngine}/tags?${optimizedParam}`;
 
+  // Path za DELETE "orphan cleanup" (SLOŽEN DELETE) - vidi movie.routes.js:
+  // DELETE /api/movies/:dbEngine/ratings/orphan-cleanup. Za razliku od
+  // deleteTagPath (limit NE postoji, sva polja idu kroz body), "limit" ovdje
+  // ide kroz QUERY STRING - isti duh kao editMoviePath (path izveden
+  // direktno iz trenutnog unosa, bez posebne "Input"/"potvrđena"
+  // razdvojenosti), tako da URL prikazan u ResponsePanel.tsx uvijek odražava
+  // limit koji je trenutno upisan u polju. Prazan unos se tretira kao
+  // "izostavljeno" (BE tad koristi svoju podrazumijevanu vrijednost, vidi
+  // movie.controller.js), a ne kao "0".
+  const orphanCleanupLimitForPath = orphanCleanupLimitInput.trim();
+  const orphanCleanupPath = orphanCleanupLimitForPath
+    ? `/movies/${dbEngine}/ratings/orphan-cleanup?limit=${orphanCleanupLimitForPath}&${optimizedParam}`
+    : `/movies/${dbEngine}/ratings/orphan-cleanup?${optimizedParam}`;
+
   // ---- Objedinjeno "šta se prikazuje u glavnom panelu" - zavisi od
   // trenutno odabranog requestKind-a. GET upiti (by-id/top-rated) koriste
   // rezultat useApi hook-a iznad, dok mutacije (add-movie/add-rating/
@@ -281,8 +324,9 @@ function App() {
   const isAddRatingKind = requestKind === "add-rating";
   const isEditTitleKind = requestKind === "edit-title";
   const isCorrectRatingsKind = requestKind === "correct-ratings";
-  // delete-tag je implicitni "else" ogranak u ternary lancima ispod (nema
-  // sopstvenu provjeru jer je requestKind uvijek jedna od 7 poznatih
+  const isDeleteTagKind = requestKind === "delete-tag";
+  // orphan-cleanup je implicitni "else" ogranak u ternary lancima ispod (nema
+  // sopstvenu provjeru jer je requestKind uvijek jedna od 8 poznatih
   // vrijednosti - vidi lib/requestKind.ts).
 
   // HTTP metoda se čita direktno iz REQUEST_KINDS metapodataka (jedan izvor
@@ -299,7 +343,9 @@ function App() {
           ? `/api${editMoviePath}`
           : isCorrectRatingsKind
             ? `/api${correctRatingsPath}`
-            : `/api${deleteTagPath}`;
+            : isDeleteTagKind
+              ? `/api${deleteTagPath}`
+              : `/api${orphanCleanupPath}`;
   const displayLoading = isGetKind
     ? loading
     : isAddMovieKind
@@ -310,7 +356,9 @@ function App() {
           ? editMovieLoading
           : isCorrectRatingsKind
             ? correctRatingsLoading
-            : deleteTagLoading;
+            : isDeleteTagKind
+              ? deleteTagLoading
+              : orphanCleanupLoading;
   const displayNetworkError = isGetKind
     ? error
     : isAddMovieKind
@@ -321,7 +369,9 @@ function App() {
           ? editMovieNetworkError
           : isCorrectRatingsKind
             ? correctRatingsNetworkError
-            : deleteTagNetworkError;
+            : isDeleteTagKind
+              ? deleteTagNetworkError
+              : orphanCleanupNetworkError;
   const displayResult = isGetKind
     ? result
     : isAddMovieKind
@@ -332,7 +382,9 @@ function App() {
           ? editMovieResult
           : isCorrectRatingsKind
             ? correctRatingsResult
-            : deleteTagResult;
+            : isDeleteTagKind
+              ? deleteTagResult
+              : orphanCleanupResult;
 
   function handleMovieIdSubmit(parsedId: number) {
     setMovieIdError(null);
@@ -657,6 +709,51 @@ function App() {
     );
   }
 
+  function openOrphanCleanupModal() {
+    // Svako otvaranje kreće "čisto" - prethodni rezultat (uspjeh/greška iz
+    // ranije sesije) se ne vuče u novi pokušaj.
+    setOrphanCleanupFormError(null);
+    resetOrphanCleanup();
+    setIsOrphanCleanupModalOpen(true);
+  }
+
+  function closeOrphanCleanupModal() {
+    setIsOrphanCleanupModalOpen(false);
+  }
+
+  function handleRunAnotherOrphanCleanup() {
+    setOrphanCleanupFormError(null);
+    resetOrphanCleanup();
+    // Isti duh kao handleRunAnotherCorrection - nema "sljedećeg" prirodnog
+    // unosa, polje (limit) ostaje popunjeno istom vrijednošću, spremno za
+    // ponovni poziv (endpoint je NAMJERNO zamišljen da se poziva više puta
+    // dok deletedCount ne padne na 0 - vidi movie.controller.js).
+  }
+
+  function handleOrphanCleanupSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setOrphanCleanupFormError(null);
+
+    const trimmedLimit = orphanCleanupLimitInput.trim();
+    if (trimmedLimit) {
+      const parsedLimit = Number(trimmedLimit);
+      if (!Number.isInteger(parsedLimit) || parsedLimit < 1) {
+        setOrphanCleanupFormError("Limit (ako je unesen) mora biti pozitivan cijeli broj.");
+        return;
+      }
+    }
+
+    // orphanCleanupPath je već izveden iz orphanCleanupLimitInput (vidi
+    // definiciju iznad) - "limit" ide kroz query string, ne kroz body (BE
+    // ionako ne čita req.body za ovu rutu, vidi movie.controller.js). Ovdje
+    // se ipak MORA poslati prazan OBJEKAT ("{}"), a ne "null" - BE koristi
+    // express.json() sa podrazumijevanim "strict" režimom (vidi app.js), koji
+    // odbija SVAKO JSON tijelo čiji prvi znak nije '{' ili '[' (pa i validan
+    // JSON kao što je "null") sa 400 GREŠKOM PRIJE nego što zahtjev uopšte
+    // stigne do kontrolera - "{}" ovo zaobilazi i bezbjedno se ignoriše.
+    void deleteOrphanRatings(orphanCleanupPath, {}, "DELETE");
+  }
+
   return (
     <div className="min-h-screen w-full flex bg-base-100 text-base-content">
       <Sidebar
@@ -670,7 +767,8 @@ function App() {
           addRatingLoading ||
           editMovieLoading ||
           correctRatingsLoading ||
-          deleteTagLoading
+          deleteTagLoading ||
+          orphanCleanupLoading
         }
       />
       <ResponsePanel
@@ -697,6 +795,7 @@ function App() {
         onOpenEditMovieModal={openEditMovieModal}
         onOpenCorrectRatingsModal={openCorrectRatingsModal}
         onOpenDeleteTagModal={openDeleteTagModal}
+        onOpenOrphanCleanupModal={openOrphanCleanupModal}
         correctRatingsAppliedDelta={lastAppliedCorrectionDelta}
         correctRatingsAppliedMinRatings={lastAppliedCorrectionMinRatings}
       />
@@ -795,6 +894,21 @@ function App() {
         status={deleteTagResult?.status ?? null}
         ok={deleteTagResult?.ok ?? null}
         body={deleteTagResult?.body}
+      />
+
+      <OrphanCleanupModal
+        open={isOrphanCleanupModalOpen}
+        onClose={closeOrphanCleanupModal}
+        limitInput={orphanCleanupLimitInput}
+        onLimitInputChange={setOrphanCleanupLimitInput}
+        formError={orphanCleanupFormError}
+        onSubmit={handleOrphanCleanupSubmit}
+        onRunAnother={handleRunAnotherOrphanCleanup}
+        loading={orphanCleanupLoading}
+        networkError={orphanCleanupNetworkError}
+        status={orphanCleanupResult?.status ?? null}
+        ok={orphanCleanupResult?.ok ?? null}
+        body={orphanCleanupResult?.body}
       />
     </div>
   );

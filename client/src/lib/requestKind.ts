@@ -1,5 +1,5 @@
 /**
- * Zajednički tip i metapodaci za SVIH SEDAM demonstriranih zahtjeva ka BE-u -
+ * Zajednički tip i metapodaci za SVIH OSAM demonstriranih zahtjeva ka BE-u -
  * koristi ih RequestTypeSelector.tsx (vizuelni birač u glavnom panelu) i
  * App.tsx (za odlučivanje koja forma / koji odgovor se prikazuje):
  *
@@ -10,6 +10,7 @@
  * - "edit-title"      -> JEDNOSTAVAN PUT:    izmijeni naslov postojećeg filma po movieId
  * - "correct-ratings" -> SLOŽEN PUT:         korekcija ocjena za "aktivne" korisnike (>N ocjena)
  * - "delete-tag"      -> JEDNOSTAVAN DELETE: obriši jedan tag zapis po (userId, movieId, tag)
+ * - "orphan-cleanup"  -> SLOŽEN DELETE:      "orphan cleanup" - obriši ocjene filmova bez ijednog taga
  *
  * Zamjenjuje raniji lib/queryType.ts (koji je pokrivao samo prva dva GET
  * upita) - "dodaj novi film" je ranije bio zaseban popup otvoren dugmetom sa
@@ -17,7 +18,7 @@
  * stavka u istom vizuelnom biraču, umjesto običnih tabova.
  *
  * NAPOMENA: ovaj izbor se NAMJERNO ne pamti u localStorage-u (za razliku od
- * dbEngine/dbMode u lib/dbPreferences.ts) - to je samo prekidač između sedam
+ * dbEngine/dbMode u lib/dbPreferences.ts) - to je samo prekidač između osam
  * demo prikaza unutar iste sesije, a ne korisnička preferenca vezana za bazu.
  */
 export type RequestKind =
@@ -27,7 +28,8 @@ export type RequestKind =
   | "add-rating"
   | "edit-title"
   | "correct-ratings"
-  | "delete-tag";
+  | "delete-tag"
+  | "orphan-cleanup";
 
 export const DEFAULT_REQUEST_KIND: RequestKind = "by-id";
 
@@ -42,9 +44,7 @@ export interface RequestKindMeta {
 /**
  * Redoslijed ovdje određuje redoslijed kartica u RequestTypeSelector.tsx -
  * namjerno GET pa POST pa PUT pa DELETE, i unutar svake grupe jednostavan pa
- * složen upit (DELETE za sada ima samo jednostavnu varijantu - vidi
- * movie.routes.js za "orphan cleanup", složen DELETE koji BE već podržava,
- * ali koji još nije uveden u ovaj birač).
+ * složen upit.
  */
 export const REQUEST_KINDS: RequestKindMeta[] = [
   {
@@ -95,5 +95,12 @@ export const REQUEST_KINDS: RequestKindMeta[] = [
     title: "Obriši tag",
     description: "Briše TAČNO JEDAN tag zapis po (userId, movieId, tag) - odbija nepostojeći zapis (404).",
     complexity: "simple",
+  },
+  {
+    kind: "orphan-cleanup",
+    method: "DELETE",
+    title: "Orphan cleanup",
+    description: "Briše ocjene filmova bez ijednog taga - do 10 po pozivu.",
+    complexity: "complex",
   },
 ];

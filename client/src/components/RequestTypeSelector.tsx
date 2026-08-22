@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import {
+  BroomIcon,
   FilmIcon,
   PencilIcon,
   SearchIcon,
@@ -24,6 +25,7 @@ const ICON_BY_KIND: Record<RequestKind, ComponentType<{ className?: string }>> =
   "edit-title": PencilIcon,
   "correct-ratings": WrenchIcon,
   "delete-tag": TrashIcon,
+  "orphan-cleanup": BroomIcon,
 };
 
 /** Boja bedža po HTTP metodi - GET plavo, POST zeleno, PUT žuto/narandžasto, DELETE crveno (uobičajena REST konvencija). */
@@ -37,23 +39,28 @@ const BADGE_CLASS_BY_METHOD: Record<(typeof REQUEST_KINDS)[number]["method"], st
 /**
  * Vizuelni birač tipa zahtjeva - zamjenjuje ranije "obične" boxed tabove
  * (QueryTypeTabs.tsx, koji je pokrivao samo 2 GET upita) kartičnim
- * prikazom SVIH ŠEST demonstriranih zahtjeva (2x GET, 2x POST, 2x PUT).
- * Svaka kartica nosi HTTP metodu (bedž), ikonicu, naslov, kratak opis i
- * oznaku jednostavan/složen - tako se odmah vidi ŠTA upit radi, umjesto
- * pukog naslova taba.
+ * prikazom SVIH OSAM demonstriranih zahtjeva (2x GET, 2x POST, 2x PUT, 2x
+ * DELETE). Svaka kartica nosi HTTP metodu (bedž), ikonicu, naslov, kratak
+ * opis i oznaku jednostavan/složen - tako se odmah vidi ŠTA upit radi,
+ * umjesto pukog naslova taba.
  *
  * Odabrana kartica ne šalje ništa sama od sebe: za GET upite (by-id,
  * top-rated) ResponsePanel.tsx ispod i dalje prikazuje pripadajuću formu za
  * potvrdu parametara, a za mutacije (add-movie, add-rating, edit-title,
- * correct-ratings) prikazuje dugme koje otvara odgovarajući popup (vidi
- * App.tsx).
+ * correct-ratings, delete-tag, orphan-cleanup) prikazuje dugme koje otvara
+ * odgovarajući popup (vidi App.tsx).
+ *
+ * NAPOMENA o rasporedu: "xl:grid-cols-4" (umjesto ranijeg "xl:grid-cols-7" iz
+ * doba kad je bilo tačno 7 kartica) sad daje dva uredna reda po 4 kartice na
+ * širokim ekranima - jedan red od 8 uskih kartica bi ih učinio pretijesnim i
+ * teško čitljivim.
  */
 export function RequestTypeSelector({ value, onChange, disabled }: RequestTypeSelectorProps) {
   return (
     <div
       role="tablist"
       aria-label="Tip zahtjeva"
-      className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3 mb-6"
+      className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-6"
     >
       {REQUEST_KINDS.map((meta) => {
         const Icon = ICON_BY_KIND[meta.kind];
